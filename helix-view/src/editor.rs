@@ -1259,6 +1259,7 @@ pub enum EditorEvent {
     ConfigEvent(ConfigEvent),
     LanguageServerMessage((LanguageServerId, Call)),
     DebuggerEvent((DebugAdapterId, dap::Payload)),
+    P2pEvent(p2p::Event),
     IdleTimer,
     Redraw,
 }
@@ -2280,6 +2281,9 @@ impl Editor {
                 }
                 Some(event) = self.debug_adapters.incoming.next() => {
                     return EditorEvent::DebuggerEvent(event)
+                }
+                Some(ping) = self.p2p_service.incoming.next() => {
+                    return EditorEvent::P2pEvent(ping)
                 }
 
                 _ = helix_event::redraw_requested() => {

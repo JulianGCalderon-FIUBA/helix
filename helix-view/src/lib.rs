@@ -13,7 +13,7 @@ pub mod handlers;
 pub mod info;
 pub mod input;
 pub mod keyboard;
-mod p2p;
+pub mod p2p;
 pub mod register;
 pub mod theme;
 pub mod tree;

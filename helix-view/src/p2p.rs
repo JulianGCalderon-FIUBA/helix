@@ -2,15 +2,18 @@ use iroh::{
     discovery::mdns::{self, MdnsDiscovery},
     endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler, Router},
-    Endpoint, EndpointAddr,
+    Endpoint, EndpointAddr, PublicKey,
 };
 use log::{error, info};
 use n0_future::StreamExt;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 pub const ALPN: &[u8] = b"helix/ping/0";
 
 #[derive(Debug, Clone)]
 pub struct PingPong {
+    sender: UnboundedSender<Event>,
     endpoint: Endpoint,
 }
 
@@ -41,6 +44,10 @@ impl ProtocolHandler for PingPong {
         assert_eq!(&req, b"PING");
         info!("pinged by: {}", connection.remote_id().fmt_short());
 
+        self.sender
+            .send(Event::Ping(connection.remote_id()))
+            .map_err(AcceptError::from_err)?;
+
         send.write_all(b"PONG")
             .await
             .map_err(AcceptError::from_err)?;
@@ -53,10 +60,19 @@ impl ProtocolHandler for PingPong {
     }
 }
 
-pub struct Service {}
+pub struct Service {
+    pub incoming: UnboundedReceiverStream<Event>,
+}
+
+#[derive(Debug)]
+pub enum Event {
+    Ping(PublicKey),
+}
 
 impl Service {
     pub fn new() -> Self {
+        let (rt, rx) = unbounded_channel();
+
         tokio::spawn(async move {
             let endpoint = Endpoint::builder()
                 .bind()
@@ -66,6 +82,7 @@ impl Service {
 
             let pingpong = PingPong {
                 endpoint: endpoint.clone(),
+                sender: rt,
             };
 
             let _router = Router::builder(endpoint.clone())
@@ -94,7 +111,9 @@ impl Service {
             }
         });
 
-        Service {}
+        Service {
+            incoming: UnboundedReceiverStream::new(rx),
+        }
     }
 }
 
