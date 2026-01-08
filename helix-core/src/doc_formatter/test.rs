@@ -17,7 +17,7 @@ impl TextFormat {
     }
 }
 
-impl<'t> DocumentFormatter<'t> {
+impl DocumentFormatter<'_> {
     fn collect_to_str(&mut self) -> String {
         use std::fmt::Write;
         let mut res = String::new();
