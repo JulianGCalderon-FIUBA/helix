@@ -9,6 +9,7 @@ use crate::{
     handlers::Handlers,
     info::Info,
     input::KeyEvent,
+    p2p,
     register::Registers,
     theme::{self, Theme},
     tree::{self, Tree},
@@ -1247,6 +1248,7 @@ pub struct Editor {
 
     pub mouse_down_range: Option<Range>,
     pub cursor_cache: CursorCache,
+    pub p2p_service: p2p::Service,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1257,6 +1259,7 @@ pub enum EditorEvent {
     ConfigEvent(ConfigEvent),
     LanguageServerMessage((LanguageServerId, Call)),
     DebuggerEvent((DebugAdapterId, dap::Payload)),
+    P2pEvent(p2p::Event),
     IdleTimer,
     Redraw,
 }
@@ -1324,6 +1327,8 @@ impl Editor {
         let conf = config.load();
         let auto_pairs = (&conf.auto_pairs).into();
 
+        let p2p_service = p2p::Service::new();
+
         // HAXX: offset the render area height by 1 to account for prompt/commandline
         area.height -= 1;
 
@@ -1368,6 +1373,7 @@ impl Editor {
             handlers,
             mouse_down_range: None,
             cursor_cache: CursorCache::default(),
+            p2p_service,
         }
     }
 
@@ -2275,6 +2281,9 @@ impl Editor {
                 }
                 Some(event) = self.debug_adapters.incoming.next() => {
                     return EditorEvent::DebuggerEvent(event)
+                }
+                Some(ping) = self.p2p_service.incoming.next() => {
+                    return EditorEvent::P2pEvent(ping)
                 }
 
                 _ = helix_event::redraw_requested() => {

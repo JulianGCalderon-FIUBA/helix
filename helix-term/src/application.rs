@@ -12,7 +12,7 @@ use helix_view::{
     document::{DocumentOpenError, DocumentSavedEventResult},
     editor::{ConfigEvent, EditorEvent},
     graphics::Rect,
-    theme,
+    p2p, theme,
     tree::Layout,
     Align, Editor,
 };
@@ -668,6 +668,10 @@ impl Application {
                     self.render().await;
                 }
             }
+            EditorEvent::P2pEvent(event) => {
+                self.handle_p2p_event(event).await;
+                helix_event::request_redraw();
+            }
             EditorEvent::Redraw => {
                 self.render().await;
             }
@@ -1136,6 +1140,15 @@ impl Application {
                 }
             }
             Call::Invalid { id } => log::error!("LSP invalid method call id={:?}", id),
+        }
+    }
+
+    pub async fn handle_p2p_event(&mut self, event: p2p::Event) {
+        match event {
+            p2p::Event::Ping(public_key) => {
+                self.editor
+                    .set_status(format!("pinged by {}", public_key.fmt_short()));
+            }
         }
     }
 
