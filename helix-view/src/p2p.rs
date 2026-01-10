@@ -4,8 +4,13 @@ use iroh::{
     protocol::{AcceptError, ProtocolHandler, Router},
     Endpoint, EndpointAddr, PublicKey,
 };
-use log::{error, info};
+use log::{error, info, warn};
 use n0_future::StreamExt;
+use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
@@ -13,7 +18,7 @@ pub const ALPN: &[u8] = b"helix/ping/0";
 
 #[derive(Debug, Clone)]
 pub struct PingPong {
-    sender: UnboundedSender<Event>,
+    client_tx: UnboundedSender<Event>,
     endpoint: Endpoint,
 }
 
@@ -44,9 +49,9 @@ impl ProtocolHandler for PingPong {
         assert_eq!(&req, b"PING");
         info!("pinged by: {}", connection.remote_id().fmt_short());
 
-        self.sender
+        self.client_tx
             .send(Event::Ping(connection.remote_id()))
-            .map_err(AcceptError::from_err)?;
+            .unwrap();
 
         send.write_all(b"PONG")
             .await
@@ -62,6 +67,7 @@ impl ProtocolHandler for PingPong {
 
 pub struct Service {
     pub incoming: UnboundedReceiverStream<Event>,
+    pub server_tx: UnboundedSender<Payload>,
 }
 
 #[derive(Debug)]
@@ -69,20 +75,26 @@ pub enum Event {
     Ping(PublicKey),
 }
 
+#[derive(Debug)]
+pub enum Payload {
+    RandomPing,
+}
+
 impl Service {
     pub fn new() -> Self {
-        let (rt, rx) = unbounded_channel();
+        let (server_tx, client_rx) = unbounded_channel();
+        let (client_tx, mut server_rx) = unbounded_channel();
 
         tokio::spawn(async move {
             let endpoint = Endpoint::builder()
                 .bind()
                 .await
                 .expect("failed to bind endpoint");
-            info!("binded at: {}", endpoint.id().fmt_short());
+            info!("binded at {}", endpoint.id().fmt_short());
 
             let pingpong = PingPong {
                 endpoint: endpoint.clone(),
-                sender: rt,
+                client_tx: server_tx,
             };
 
             let _router = Router::builder(endpoint.clone())
@@ -94,25 +106,54 @@ impl Service {
                 .expect("failed to build discovery service");
             endpoint.discovery().add(mdns.clone());
 
-            let mut discovery_events = mdns.subscribe().await;
-            while let Some(event) = discovery_events.next().await {
-                match event {
-                    mdns::DiscoveryEvent::Discovered { endpoint_info, .. } => {
-                        info!("peer discovered: {}", endpoint_info.endpoint_id.fmt_short());
+            let peers = Arc::new(Mutex::new(HashSet::new()));
+            let peers_clone = peers.clone();
+            tokio::spawn(async move {
+                let mut discovery_events = mdns.subscribe().await;
 
-                        if let Err(err) = pingpong.ping(endpoint_info.endpoint_id).await {
-                            error!("failed to ping: {:#}", err);
+                while let Some(event) = discovery_events.next().await {
+                    match event {
+                        mdns::DiscoveryEvent::Discovered { endpoint_info, .. } => {
+                            let unknown = peers_clone
+                                .lock()
+                                .unwrap()
+                                .insert(endpoint_info.endpoint_id);
+                            if unknown {
+                                info!("discovered peer {}", endpoint_info.endpoint_id.fmt_short());
+                            }
+                        }
+                        mdns::DiscoveryEvent::Expired { endpoint_id } => {
+                            warn!("expired peer {}", endpoint_id.fmt_short());
+                            peers_clone.lock().unwrap().remove(&endpoint_id);
                         }
                     }
-                    mdns::DiscoveryEvent::Expired { endpoint_id } => {
-                        error!("peer expired: {}", endpoint_id.fmt_short())
+                }
+            });
+
+            let mut rng = { StdRng::from_rng(&mut rand::rng()) };
+            while let Some(payload) = server_rx.recv().await {
+                match payload {
+                    Payload::RandomPing => {
+                        let peer = peers.lock().unwrap().iter().choose(&mut rng).cloned();
+
+                        match peer {
+                            Some(peer) => {
+                                if let Err(err) = pingpong.ping(peer).await {
+                                    error!("failed to ping peer {}: {:#}", peer.fmt_short(), err)
+                                }
+                            }
+                            None => {
+                                warn!("no peers to ping")
+                            }
+                        }
                     }
                 }
             }
         });
 
         Service {
-            incoming: UnboundedReceiverStream::new(rx),
+            incoming: UnboundedReceiverStream::new(client_rx),
+            server_tx: client_tx,
         }
     }
 }
