@@ -13,7 +13,7 @@ use helix_core::line_ending;
 use helix_stdx::path::home_dir;
 use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
 use helix_view::editor::{CloseError, ConfigEvent};
-use helix_view::expansion;
+use helix_view::{expansion, p2p};
 use serde_json::Value;
 use ui::completers::{self, Completer};
 
@@ -2728,6 +2728,19 @@ fn noop(_cx: &mut compositor::Context, _args: Args, _event: PromptEvent) -> anyh
     Ok(())
 }
 
+fn ping(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    cx.editor
+        .p2p_service
+        .server_tx
+        .send(p2p::Payload::RandomPing)
+        .unwrap();
+    Ok(())
+}
+
 /// This command accepts a single boolean --skip-visible flag and no positionals.
 const BUFFER_CLOSE_OTHERS_SIGNATURE: Signature = Signature {
     positionals: (0, Some(0)),
@@ -3783,6 +3796,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         aliases: &[],
         doc: "Does nothing.",
         fun: noop,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, None),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "ping",
+        aliases: &[],
+        doc: "Pings a random peer.",
+        fun: ping,
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, None),
