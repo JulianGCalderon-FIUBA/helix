@@ -14,6 +14,9 @@ fn setup_logging(verbosity: u64) -> Result<()> {
         _3_or_more => base_config.level(log::LevelFilter::Trace),
     };
 
+    // For debugging purposes, should be removed.
+    base_config = base_config.level_for("helix_view::p2p", log::LevelFilter::Info);
+
     // Separate file config so we can include year, month and day in file logs
     let file_config = fern::Dispatch::new()
         .format(|out, message, record| {

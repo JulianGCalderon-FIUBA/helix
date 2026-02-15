@@ -1,23 +1,19 @@
+use std::str::FromStr;
+
 use iroh::{
-    discovery::mdns::{self, MdnsDiscovery},
     endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler, Router},
     Endpoint, EndpointAddr, PublicKey,
 };
-use log::{error, info, warn};
-use n0_future::StreamExt;
-use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
-use std::{
-    collections::HashSet,
-    sync::{Arc, Mutex},
-};
+use iroh_tickets::endpoint::EndpointTicket;
+use log::{error, info};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 pub const ALPN: &[u8] = b"helix/ping/0";
 
 #[derive(Debug, Clone)]
-pub struct PingPong {
+struct PingPong {
     client_tx: UnboundedSender<Event>,
     endpoint: Endpoint,
 }
@@ -77,7 +73,8 @@ pub enum Event {
 
 #[derive(Debug)]
 pub enum Payload {
-    RandomPing,
+    TicketNew,
+    TicketJoin(String),
 }
 
 impl Service {
@@ -101,50 +98,21 @@ impl Service {
                 .accept(ALPN, pingpong.clone())
                 .spawn();
 
-            let mdns = MdnsDiscovery::builder()
-                .build(endpoint.id())
-                .expect("failed to build discovery service");
-            endpoint.discovery().add(mdns.clone());
-
-            let peers = Arc::new(Mutex::new(HashSet::new()));
-            let peers_clone = peers.clone();
-            tokio::spawn(async move {
-                let mut discovery_events = mdns.subscribe().await;
-
-                while let Some(event) = discovery_events.next().await {
-                    match event {
-                        mdns::DiscoveryEvent::Discovered { endpoint_info, .. } => {
-                            let unknown = peers_clone
-                                .lock()
-                                .unwrap()
-                                .insert(endpoint_info.endpoint_id);
-                            if unknown {
-                                info!("discovered peer {}", endpoint_info.endpoint_id.fmt_short());
-                            }
-                        }
-                        mdns::DiscoveryEvent::Expired { endpoint_id } => {
-                            warn!("expired peer {}", endpoint_id.fmt_short());
-                            peers_clone.lock().unwrap().remove(&endpoint_id);
-                        }
-                    }
-                }
-            });
-
-            let mut rng = { StdRng::from_rng(&mut rand::rng()) };
             while let Some(payload) = server_rx.recv().await {
                 match payload {
-                    Payload::RandomPing => {
-                        let peer = peers.lock().unwrap().iter().choose(&mut rng).cloned();
-
-                        match peer {
-                            Some(peer) => {
-                                if let Err(err) = pingpong.ping(peer).await {
-                                    error!("failed to ping peer {}: {:#}", peer.fmt_short(), err)
-                                }
-                            }
-                            None => {
-                                warn!("no peers to ping")
-                            }
+                    Payload::TicketNew => {
+                        let ticket = EndpointTicket::new(endpoint.addr());
+                        info!("generated ticket {}", ticket);
+                    }
+                    Payload::TicketJoin(ticket) => {
+                        let ticket = EndpointTicket::from_str(&ticket)
+                            .expect("failed to deserialize ticket");
+                        if let Err(err) = pingpong.ping(ticket.clone()).await {
+                            error!(
+                                "failed to ping peer {}: {:#}",
+                                ticket.endpoint_addr().id.fmt_short(),
+                                err
+                            )
                         }
                     }
                 }

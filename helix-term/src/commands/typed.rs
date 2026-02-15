@@ -2728,7 +2728,7 @@ fn noop(_cx: &mut compositor::Context, _args: Args, _event: PromptEvent) -> anyh
     Ok(())
 }
 
-fn ping(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+fn ticket_new(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
     }
@@ -2736,7 +2736,20 @@ fn ping(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow
     cx.editor
         .p2p_service
         .server_tx
-        .send(p2p::Payload::RandomPing)
+        .send(p2p::Payload::TicketNew)
+        .unwrap();
+    Ok(())
+}
+
+fn ticket_join(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    cx.editor
+        .p2p_service
+        .server_tx
+        .send(p2p::Payload::TicketJoin(args.first().unwrap().to_string()))
         .unwrap();
     Ok(())
 }
@@ -3803,13 +3816,24 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         },
     },
     TypableCommand {
-        name: "ping",
+        name: "ticket-new",
         aliases: &[],
-        doc: "Pings a random peer.",
-        fun: ping,
+        doc: "Generates a ticket for the collaborative session.",
+        fun: ticket_new,
         completer: CommandCompleter::none(),
         signature: Signature {
-            positionals: (0, None),
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "ticket-join",
+        aliases: &[],
+        doc: "Joins a collaborative session.",
+        fun: ticket_join,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (1, Some(1)),
             ..Signature::DEFAULT
         },
     },
