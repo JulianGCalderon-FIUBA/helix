@@ -15,6 +15,7 @@ use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
 use helix_view::editor::{CloseError, ConfigEvent};
 use helix_view::{expansion, p2p};
 use serde_json::Value;
+use tokio::sync::mpsc::channel;
 use ui::completers::{self, Completer};
 
 #[derive(Clone)]
@@ -2733,11 +2734,29 @@ fn ticket_new(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> 
         return Ok(());
     }
 
+    let (tx, mut rx) = channel(1);
     cx.editor
         .p2p_service
         .server_tx
-        .send(p2p::Payload::TicketNew)
+        .send(p2p::Payload::TicketNew(tx))
         .unwrap();
+    cx.jobs.callback(async move {
+        let ticket = rx.recv().await.expect("ticket should be returned");
+        Ok(job::Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                let contents = ui::Markdown::new(ticket.clone(), editor.syn_loader.clone());
+                let popup = Popup::new("ticket", contents).auto_close(true);
+                compositor.replace_or_push("ticket", popup);
+
+                let register = editor.selected_register.unwrap_or('+');
+                match editor.registers.write(register, vec![ticket]) {
+                    Ok(_) => editor.set_status(format!("yanked ticket to register {register}",)),
+                    Err(err) => editor.set_error(err.to_string()),
+                }
+            },
+        )))
+    });
+
     Ok(())
 }
 

@@ -7,7 +7,7 @@ use iroh::{
 };
 use iroh_tickets::endpoint::EndpointTicket;
 use log::{error, info};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio::sync::mpsc::{unbounded_channel, Sender, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 pub const ALPN: &[u8] = b"helix/ping/0";
@@ -73,7 +73,7 @@ pub enum Event {
 
 #[derive(Debug)]
 pub enum Payload {
-    TicketNew,
+    TicketNew(Sender<String>),
     TicketJoin(String),
 }
 
@@ -100,9 +100,13 @@ impl Service {
 
             while let Some(payload) = server_rx.recv().await {
                 match payload {
-                    Payload::TicketNew => {
+                    Payload::TicketNew(chan) => {
                         let ticket = EndpointTicket::new(endpoint.addr());
                         info!("generated ticket {}", ticket);
+
+                        chan.send(ticket.to_string())
+                            .await
+                            .expect("failed to return ticket");
                     }
                     Payload::TicketJoin(ticket) => {
                         let ticket = EndpointTicket::from_str(&ticket)
