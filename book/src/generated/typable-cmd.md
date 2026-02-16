@@ -92,4 +92,5 @@
 | `:read`, `:r` | Load a file into buffer |
 | `:echo` | Prints the given arguments to the statusline. |
 | `:noop` | Does nothing. |
-| `:ping` | Pings a random peer. |
+| `:ticket-new` | Creates a ticket for the collaborative session and yanks it into the system clipboard. |
+| `:ticket-join` | Joins a collaborative session with the given ticket. |
