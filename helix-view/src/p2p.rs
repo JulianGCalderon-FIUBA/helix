@@ -102,7 +102,7 @@ impl Service {
                 match payload {
                     Payload::TicketNew(chan) => {
                         let ticket = EndpointTicket::new(endpoint.addr());
-                        info!("generated ticket {}", ticket);
+                        info!("generated ticket: {}", ticket);
 
                         chan.send(ticket.to_string())
                             .await

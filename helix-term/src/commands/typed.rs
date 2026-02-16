@@ -2739,15 +2739,16 @@ fn ticket_new(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> 
         .p2p_service
         .server_tx
         .send(p2p::Payload::TicketNew(tx))
-        .unwrap();
+        .expect("p2p service should be running");
     cx.jobs.callback(async move {
         let ticket = rx.recv().await.expect("ticket should be returned");
         Ok(job::Callback::EditorCompositor(Box::new(
             move |editor: &mut Editor, compositor: &mut Compositor| {
+                // Show ticket in popup.
                 let contents = ui::Markdown::new(ticket.clone(), editor.syn_loader.clone());
                 let popup = Popup::new("ticket", contents).auto_close(true);
                 compositor.replace_or_push("ticket", popup);
-
+                // Update status line.
                 let register = editor.selected_register.unwrap_or('+');
                 match editor.registers.write(register, vec![ticket]) {
                     Ok(_) => editor.set_status(format!("yanked ticket to register {register}",)),
@@ -2769,7 +2770,7 @@ fn ticket_join(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> 
         .p2p_service
         .server_tx
         .send(p2p::Payload::TicketJoin(args.first().unwrap().to_string()))
-        .unwrap();
+        .expect("p2p service should be running");
     Ok(())
 }
 
@@ -3837,7 +3838,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "ticket-new",
         aliases: &[],
-        doc: "Generates a ticket for the collaborative session.",
+        doc: "Creates a ticket for the collaborative session and yanks it into the system clipboard.",
         fun: ticket_new,
         completer: CommandCompleter::none(),
         signature: Signature {
@@ -3848,7 +3849,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "ticket-join",
         aliases: &[],
-        doc: "Joins a collaborative session.",
+        doc: "Joins a collaborative session with the given ticket.",
         fun: ticket_join,
         completer: CommandCompleter::none(),
         signature: Signature {
