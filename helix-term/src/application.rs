@@ -1204,9 +1204,27 @@ impl Application {
 
     pub async fn handle_p2p_event(&mut self, event: p2p::Event) {
         match event {
+            p2p::Event::Connected(public_key) => {
+                self.editor
+                    .set_status(format!("session started with {}", public_key.fmt_short()));
+            }
             p2p::Event::Ping(public_key) => {
                 self.editor
                     .set_status(format!("pinged by {}", public_key.fmt_short()));
+            }
+            p2p::Event::Pong(public_key, rtt) => {
+                self.editor.set_status(format!(
+                    "ponged by {} in {}ms",
+                    public_key.fmt_short(),
+                    rtt.as_millis()
+                ));
+            }
+            p2p::Event::Disconnected(public_key) => {
+                self.editor
+                    .set_status(format!("session ended with {}", public_key.fmt_short()));
+            }
+            p2p::Event::Error(err) => {
+                self.editor.set_error(err);
             }
         }
     }
