@@ -13,8 +13,9 @@ use helix_core::line_ending;
 use helix_stdx::path::home_dir;
 use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
 use helix_view::editor::{CloseError, ConfigEvent};
-use helix_view::expansion;
+use helix_view::{expansion, p2p};
 use serde_json::Value;
+use tokio::sync::mpsc::channel;
 use ui::completers::{self, Completer};
 
 #[derive(Clone)]
@@ -2962,6 +2963,51 @@ fn noop(_cx: &mut compositor::Context, _args: Args, _event: PromptEvent) -> anyh
     Ok(())
 }
 
+fn ticket_new(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    let (tx, mut rx) = channel(1);
+    cx.editor
+        .p2p_service
+        .server_tx
+        .send(p2p::Payload::TicketNew(tx))
+        .expect("p2p service should be running");
+    cx.jobs.callback(async move {
+        let ticket = rx.recv().await.expect("ticket should be returned");
+        Ok(job::Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                // Show ticket in popup.
+                let contents = ui::Markdown::new(ticket.clone(), editor.syn_loader.clone());
+                let popup = Popup::new("ticket", contents).auto_close(true);
+                compositor.replace_or_push("ticket", popup);
+                // Update status line.
+                let register = editor.selected_register.unwrap_or('+');
+                match editor.registers.write(register, vec![ticket]) {
+                    Ok(_) => editor.set_status(format!("yanked ticket to register {register}",)),
+                    Err(err) => editor.set_error(err.to_string()),
+                }
+            },
+        )))
+    });
+
+    Ok(())
+}
+
+fn ticket_join(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    cx.editor
+        .p2p_service
+        .server_tx
+        .send(p2p::Payload::TicketJoin(args.first().unwrap().to_string()))
+        .expect("p2p service should be running");
+    Ok(())
+}
+
 /// This command accepts a single boolean --skip-visible flag and no positionals.
 const BUFFER_CLOSE_OTHERS_SIGNATURE: Signature = Signature {
     positionals: (0, Some(0)),
@@ -4108,7 +4154,30 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         fun: exclude_workspace,
         completer: CommandCompleter::none(),
         signature: Signature { positionals: (0, None), ..Signature::DEFAULT },
-    }
+    },
+    TypableCommand {
+        name: "ticket-new",
+        aliases: &[],
+        doc: "Creates a ticket for the collaborative session and yanks it into the system clipboard.",
+        fun: ticket_new,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "ticket-join",
+        aliases: &[],
+        doc: "Joins a collaborative session with the given ticket.",
+        fun: ticket_join,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (1, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+
 ];
 
 pub static TYPABLE_COMMAND_MAP: Lazy<HashMap<&'static str, &'static TypableCommand>> =
