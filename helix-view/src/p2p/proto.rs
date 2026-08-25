@@ -32,6 +32,8 @@ pub enum Message {
     Ping { nonce: u64 },
     /// Answer to [`Message::Ping`], echoing its nonce.
     Pong { nonce: u64 },
+    /// A payload for the layer above, which this one does not interpret.
+    Data(Vec<u8>),
 }
 
 /// Encodes a message into a frame.
@@ -105,6 +107,14 @@ mod tests {
             panic!("expected a ping");
         };
         assert_eq!(nonce, 42);
+    }
+
+    #[test]
+    fn roundtrips_a_payload() {
+        let Message::Data(data) = roundtrip(Message::Data(b"hello".to_vec())) else {
+            panic!("expected a payload");
+        };
+        assert_eq!(data, b"hello");
     }
 
     #[test]

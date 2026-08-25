@@ -3025,6 +3025,21 @@ fn ticket_ping(
     Ok(())
 }
 
+/// Broadcasts a line of text to the session.
+///
+/// The session carries opaque bytes, so until documents are shared this is
+/// what shows that a payload reaches the other peers at all.
+fn ticket_send(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    cx.editor
+        .p2p_service
+        .broadcast(args.first().unwrap().as_bytes().to_vec());
+    Ok(())
+}
+
 fn ticket_peers(
     cx: &mut compositor::Context,
     _args: Args,
@@ -4236,6 +4251,18 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "ticket-send",
+        aliases: &[],
+        doc: "Sends a message to every peer of the current collaborative session.",
+        fun: ticket_send,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (1, Some(1)),
+            raw_after: Some(0),
             ..Signature::DEFAULT
         },
     },

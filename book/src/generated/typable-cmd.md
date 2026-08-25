@@ -103,5 +103,6 @@
 | `:ticket-new` | Creates a ticket for the collaborative session and yanks it into the system clipboard. |
 | `:ticket-join` | Joins a collaborative session with the given ticket. |
 | `:ticket-ping` | Pings every peer of the current collaborative session. |
+| `:ticket-send` | Sends a message to every peer of the current collaborative session. |
 | `:ticket-peers` | Lists the peers of the current collaborative session. |
 | `:ticket-close` | Leaves the current collaborative session. |

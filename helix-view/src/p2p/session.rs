@@ -20,7 +20,7 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{bail, ensure, Context, Result};
 use iroh::{
     endpoint::{Connection, RecvStream, SendStream},
     protocol::{AcceptError, ProtocolHandler},
@@ -131,6 +131,33 @@ impl Session {
         Ok(())
     }
 
+    /// Sends an opaque payload to every peer of the session.
+    ///
+    /// What the bytes mean is up to the layer above; this one only carries
+    /// them, in order, to everyone currently in the session.
+    pub fn broadcast(&self, data: Vec<u8>) -> Result<()> {
+        let peers = self.peers.lock().unwrap();
+        ensure!(!peers.is_empty(), "not in a session");
+
+        for peer in peers.values() {
+            let _ = peer.outbox.send(Message::Data(data.clone()));
+        }
+
+        Ok(())
+    }
+
+    /// Sends an opaque payload to a single peer of the session.
+    pub fn send(&self, to: EndpointId, data: Vec<u8>) -> Result<()> {
+        let peers = self.peers.lock().unwrap();
+        let peer = peers
+            .get(&to)
+            .with_context(|| format!("{} is not in the session", to.fmt_short()))?;
+
+        let _ = peer.outbox.send(Message::Data(data));
+
+        Ok(())
+    }
+
     /// Reports the peers currently in the session.
     pub fn ticket_peers(&self) -> Result<()> {
         let mut peers: Vec<_> = self.peers.lock().unwrap().keys().copied().collect();
@@ -228,7 +255,7 @@ impl Session {
         .await?;
 
         // The newcomer is not a peer yet, so this reaches everyone but it.
-        self.broadcast(Message::PeerJoined { addr: addr.clone() });
+        self.deliver_all(Message::PeerJoined { addr: addr.clone() });
 
         self.serve(addr, connection, send, recv, Dialed::Them).await;
 
@@ -299,7 +326,7 @@ impl Session {
     fn handle(&self, from: EndpointId, message: Message) {
         match message {
             Message::Ping { nonce } => {
-                self.send(from, Message::Pong { nonce });
+                self.deliver(from, Message::Pong { nonce });
                 self.emit(Event::Ping(from));
             }
             Message::Pong { nonce } => {
@@ -316,6 +343,7 @@ impl Session {
                     None => self.report(format!("unexpected pong from {}", from.fmt_short())),
                 }
             }
+            Message::Data(data) => self.emit(Event::Message { from, data }),
             Message::PeerJoined { addr } => self.connect(addr),
             // The handshake is over; seeing it again means the peer is
             // speaking a protocol we do not.
@@ -390,13 +418,13 @@ impl Session {
             .collect()
     }
 
-    fn send(&self, to: EndpointId, message: Message) {
+    fn deliver(&self, to: EndpointId, message: Message) {
         if let Some(peer) = self.peers.lock().unwrap().get(&to) {
             let _ = peer.outbox.send(message);
         }
     }
 
-    fn broadcast(&self, message: Message) {
+    fn deliver_all(&self, message: Message) {
         for peer in self.peers.lock().unwrap().values() {
             let _ = peer.outbox.send(message.clone());
         }
@@ -438,7 +466,7 @@ mod tests {
 
     struct Member {
         session: Session,
-        _events: UnboundedReceiver<Event>,
+        events: UnboundedReceiver<Event>,
         _router: Router,
     }
 
@@ -460,8 +488,18 @@ mod tests {
 
             Self {
                 session,
-                _events: events_rx,
+                events: events_rx,
                 _router: router,
+            }
+        }
+
+        /// Waits for the next payload this member receives.
+        async fn recv(&mut self) -> (EndpointId, Vec<u8>) {
+            loop {
+                match self.events.recv().await.expect("session should be running") {
+                    Event::Message { from, data } => return (from, data),
+                    _ => continue,
+                }
             }
         }
 
@@ -542,6 +580,54 @@ mod tests {
         members[0].session.ticket_join(&second).unwrap();
 
         await_mesh(&members).await;
+    }
+
+    /// A payload reaches every peer, including the ones we never dialed.
+    #[tokio::test]
+    async fn a_broadcast_reaches_the_whole_session() {
+        let mut members = [
+            Member::spawn().await,
+            Member::spawn().await,
+            Member::spawn().await,
+        ];
+
+        members[1]
+            .session
+            .ticket_join(&members[0].session.ticket_new())
+            .unwrap();
+        await_mesh(&members[..2]).await;
+        members[2]
+            .session
+            .ticket_join(&members[1].session.ticket_new())
+            .unwrap();
+        await_mesh(&members).await;
+
+        let sender = members[0].session.id();
+        members[0].session.broadcast(b"hello".to_vec()).unwrap();
+
+        for member in &mut members[1..] {
+            assert_eq!(member.recv().await, (sender, b"hello".to_vec()));
+        }
+    }
+
+    /// Payloads keep the order the sender wrote them in.
+    #[tokio::test]
+    async fn payloads_arrive_in_order() {
+        let mut members = [Member::spawn().await, Member::spawn().await];
+        members[1]
+            .session
+            .ticket_join(&members[0].session.ticket_new())
+            .unwrap();
+        await_mesh(&members).await;
+
+        let peer = members[1].session.id();
+        for index in 0..100u8 {
+            members[0].session.send(peer, vec![index]).unwrap();
+        }
+
+        for index in 0..100u8 {
+            assert_eq!(members[1].recv().await.1, vec![index]);
+        }
     }
 
     #[tokio::test]
