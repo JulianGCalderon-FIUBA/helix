@@ -1206,11 +1206,11 @@ impl Application {
         match event {
             p2p::Event::Connected(public_key) => {
                 self.editor
-                    .set_status(format!("session started with {}", public_key.fmt_short()));
+                    .set_status(format!("connected with {}", public_key.fmt_short()));
             }
             p2p::Event::Disconnected(public_key) => {
                 self.editor
-                    .set_status(format!("session ended with {}", public_key.fmt_short()));
+                    .set_status(format!("disconnected with {}", public_key.fmt_short()));
             }
             p2p::Event::Peers(peers) => {
                 let peers: Vec<String> = peers
@@ -1218,7 +1218,7 @@ impl Application {
                     .map(|peer| peer.fmt_short().to_string())
                     .collect();
                 self.editor
-                    .set_status(format!("session peers: {}", peers.join(", ")));
+                    .set_status(format!("current peers: {}", peers.join(", ")));
             }
             p2p::Event::Message { from, data } => {
                 // Payloads have no owner until documents are shared, so for
