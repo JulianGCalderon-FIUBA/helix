@@ -19,7 +19,6 @@ use serde::{Deserialize, Serialize};
 /// keeps a malformed frame from allocating an arbitrary amount of memory.
 const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
 
-/// A message exchanged over the session stream.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
     /// First frame of the stream. The dialer has to write before the peer
@@ -31,7 +30,6 @@ pub enum Message {
     Data(Vec<u8>),
 }
 
-/// Encodes a message into a frame.
 pub fn encode(message: &Message) -> Result<Vec<u8>> {
     let body = postcard::to_stdvec(message)?;
     ensure!(
@@ -48,19 +46,15 @@ pub fn encode(message: &Message) -> Result<Vec<u8>> {
     Ok(frame)
 }
 
-/// Decodes the body of a frame.
 pub fn decode(body: &[u8]) -> Result<Message> {
     Ok(postcard::from_bytes(body)?)
 }
 
-/// Writes a single message to the stream.
 pub async fn write(send: &mut SendStream, message: &Message) -> Result<()> {
     send.write_all(&encode(message)?).await?;
     Ok(())
 }
 
-/// Reads a single message from the stream.
-///
 /// Returns `None` once the remote finished the stream, which is how a peer
 /// that leaves cleanly ends the conversation.
 pub async fn read(recv: &mut RecvStream) -> Result<Option<Message>> {

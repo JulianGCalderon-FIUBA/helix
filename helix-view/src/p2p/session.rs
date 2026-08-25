@@ -33,16 +33,13 @@ use super::{
 /// Close code for leaving a session on purpose.
 const BYE: u32 = 0;
 
-/// A peer of the session, and the stream we talk to it over.
 #[derive(Debug)]
 struct Peer {
     addr: EndpointAddr,
     connection: Connection,
-    /// Messages queued for the writer of this connection.
     outbox: UnboundedSender<Message>,
 }
 
-/// The peers we are currently in a session with.
 #[derive(Debug, Clone)]
 pub struct Session {
     endpoint: Endpoint,
@@ -81,15 +78,12 @@ impl Session {
         self.emit(Event::Error(error));
     }
 
-    /// Mints a ticket for this session.
-    ///
-    /// Every member can invite, so the ticket is simply our own address: the
-    /// peer that redeems it reaches the whole session through us.
+    /// Every member can invite, so a ticket is just our own address: whoever
+    /// redeems it reaches the whole session through us.
     pub fn ticket_new(&self) -> String {
         EndpointTicket::new(self.endpoint.addr()).to_string()
     }
 
-    /// Joins the session advertised by a ticket.
     pub fn ticket_join(&self, ticket: &str) -> Result<()> {
         let ticket = EndpointTicket::from_str(ticket)?;
         ensure!(
@@ -102,8 +96,6 @@ impl Session {
         Ok(())
     }
 
-    /// Sends an opaque payload to every peer of the session.
-    ///
     /// What the bytes mean is up to the layer above; this one only carries
     /// them, in order, to everyone currently in the session.
     pub fn broadcast(&self, data: Vec<u8>) -> Result<()> {
@@ -117,7 +109,6 @@ impl Session {
         Ok(())
     }
 
-    /// Reports the peers currently in the session.
     pub fn ticket_peers(&self) -> Result<()> {
         let peers: Vec<_> = self.peers.lock().unwrap().keys().copied().collect();
         ensure!(!peers.is_empty(), "not in a session");
@@ -127,7 +118,6 @@ impl Session {
         Ok(())
     }
 
-    /// Leaves the session, dropping every peer.
     pub fn ticket_close(&self) -> Result<()> {
         let peers = std::mem::take(&mut *self.peers.lock().unwrap());
         ensure!(!peers.is_empty(), "not in a session");
@@ -140,7 +130,6 @@ impl Session {
         Ok(())
     }
 
-    /// Dials a peer, unless it is us or one we already have.
     fn connect(&self, addr: EndpointAddr) {
         let id = addr.id;
         if id == self.id()
@@ -175,8 +164,6 @@ impl Session {
             bail!("expected a welcome");
         };
 
-        // The rest of the session is ours to dial: the peer that let us in
-        // only introduces us, it does not relay for us.
         for peer in peers {
             self.connect(peer);
         }
@@ -202,15 +189,13 @@ impl Session {
         )
         .await?;
 
-        // The newcomer dials the rest of the session itself, so there is
-        // nothing left for us to do but talk to it.
         let addr = self.remote_addr(connection.remote_id()).await;
         self.serve(addr, connection, send, recv).await;
 
         Ok(())
     }
 
-    /// Runs a connection until it ends, reading messages from the peer.
+    /// Runs until the connection ends.
     async fn serve(
         &self,
         addr: EndpointAddr,
@@ -228,7 +213,6 @@ impl Session {
         loop {
             match proto::read(&mut recv).await {
                 Ok(Some(message)) => self.handle(id, message),
-                // The peer finished the stream, which is how it says goodbye.
                 Ok(None) => break,
                 Err(err) => {
                     if connection.close_reason().is_none() {
@@ -242,7 +226,7 @@ impl Session {
         self.leave(id, &connection);
     }
 
-    /// Drains the outbox of a peer into its half of the session stream.
+    /// Spawns the task draining a peer's outbox into its half of the stream.
     fn write(
         &self,
         connection: Connection,
@@ -269,8 +253,6 @@ impl Session {
     fn handle(&self, from: EndpointId, message: Message) {
         match message {
             Message::Data(data) => self.emit(Event::Message { from, data }),
-            // The handshake is over; seeing it again means the peer is
-            // speaking a protocol we do not.
             Message::Hello | Message::Welcome { .. } => self.report(format!(
                 "unexpected handshake message from {}",
                 from.fmt_short()
@@ -278,7 +260,6 @@ impl Session {
         }
     }
 
-    /// Adds a peer to the session.
     fn enter(&self, addr: EndpointAddr, connection: Connection, outbox: UnboundedSender<Message>) {
         self.peers.lock().unwrap().insert(
             addr.id,
@@ -290,7 +271,8 @@ impl Session {
         );
     }
 
-    /// Drops a peer, unless it has already been removed.
+    /// Does nothing if the peer is already gone, so that a connection ending
+    /// after `ticket_close` does not report a second disconnect.
     fn leave(&self, id: EndpointId, connection: &Connection) {
         if self.peers.lock().unwrap().remove(&id).is_none() {
             return;
