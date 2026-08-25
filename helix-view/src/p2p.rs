@@ -1,64 +1,153 @@
-use std::str::FromStr;
+use std::{
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
+use anyhow::{ensure, Context};
 use iroh::{
     endpoint::{presets, Connection},
     protocol::{AcceptError, ProtocolHandler, Router},
-    Endpoint, EndpointAddr, PublicKey,
+    Endpoint, PublicKey,
 };
 use iroh_tickets::endpoint::EndpointTicket;
-use log::{error, info};
 use tokio::sync::mpsc::{unbounded_channel, Sender, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-pub const ALPN: &[u8] = b"helix/ping/0";
+pub const ALPN: &[u8] = b"helix/session/0";
 
+const PING: &[u8] = b"PING";
+const PONG: &[u8] = b"PONG";
+
+const BYE: u32 = 0;
+
+/// A long lived session with a single peer.
 #[derive(Debug, Clone)]
-struct PingPong {
-    client_tx: UnboundedSender<Event>,
+struct Session {
     endpoint: Endpoint,
+    events: UnboundedSender<Event>,
+    peer: Arc<Mutex<Option<Connection>>>,
 }
 
-impl PingPong {
-    async fn ping(&self, addr: impl Into<EndpointAddr>) -> anyhow::Result<()> {
-        let connection = self.endpoint.connect(addr, ALPN).await?;
-        let (mut send, mut recv) = connection.open_bi().await?;
+impl Session {
+    fn connection(&self) -> Option<Connection> {
+        self.peer.lock().unwrap().clone()
+    }
 
-        send.write_all(b"PING").await?;
-        send.finish()?;
-        info!("pinging: {}", connection.remote_id().fmt_short());
+    fn enter(&self, connection: &Connection) {
+        *self.peer.lock().unwrap() = Some(connection.clone());
+    }
 
-        let response = recv.read_to_end(4).await?;
-        assert_eq!(&response, b"PONG");
-        info!("ponged by: {}", connection.remote_id().fmt_short());
+    fn take(&self) -> Option<Connection> {
+        self.peer.lock().unwrap().take()
+    }
 
-        connection.close(0u32.into(), b"bye!");
+    async fn ticket_new(&self, chan: Sender<String>) -> anyhow::Result<()> {
+        let ticket = EndpointTicket::new(self.endpoint.addr());
+        chan.send(ticket.to_string()).await.unwrap();
+        Ok(())
+    }
+
+    async fn ticket_join(&self, ticket: &str) -> anyhow::Result<()> {
+        let ticket = EndpointTicket::from_str(ticket)?;
+        let connection = self.endpoint.connect(ticket, ALPN).await?;
+        let session = self.clone();
+        tokio::spawn(async move { session.accept(connection).await });
+        Ok(())
+    }
+
+    fn ticket_ping(&self) -> anyhow::Result<()> {
+        let connection = self.connection().context("not in a session")?;
+        let remote = connection.remote_id();
+        let events = self.events.clone();
+
+        tokio::spawn(async move {
+            match send_ping(&connection).await {
+                Ok(rtt) => {
+                    events.send(Event::Pong(remote, rtt)).unwrap();
+                }
+                Err(err) => {
+                    events
+                        .send(Event::Error(format!(
+                            "failed to ping {}: {:#}",
+                            remote.fmt_short(),
+                            err
+                        )))
+                        .unwrap();
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    fn ticket_close(&self) -> anyhow::Result<()> {
+        let connection = self.take().context("not in a session")?;
+        let remote = connection.remote_id();
+
+        connection.close(BYE.into(), b"bye");
+        self.events.send(Event::Disconnected(remote)).unwrap();
 
         Ok(())
     }
 }
 
-impl ProtocolHandler for PingPong {
+impl ProtocolHandler for Session {
     async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
-        let (mut send, mut recv) = connection.accept_bi().await?;
+        let remote = connection.remote_id();
+        self.enter(&connection);
 
-        let req = recv.read_to_end(4).await.map_err(AcceptError::from_err)?;
-        assert_eq!(&req, b"PING");
-        info!("pinged by: {}", connection.remote_id().fmt_short());
+        self.events.send(Event::Connected(remote)).unwrap();
 
-        self.client_tx
-            .send(Event::Ping(connection.remote_id()))
-            .unwrap();
+        loop {
+            if let Err(err) = answer_ping(&connection).await {
+                if connection.close_reason().is_none() {
+                    self.events
+                        .send(Event::Error(format!(
+                            "failed to answer ping from {}: {:#}",
+                            remote.fmt_short(),
+                            err
+                        )))
+                        .unwrap();
+                }
+                break;
+            }
 
-        send.write_all(b"PONG")
-            .await
-            .map_err(AcceptError::from_err)?;
-        info!("ponging: {}", connection.remote_id().fmt_short());
+            self.events.send(Event::Ping(remote)).unwrap();
+        }
 
-        send.finish()?;
-        connection.closed().await;
+        if let Some(connection) = self.take() {
+            connection.close(BYE.into(), b"bye");
+            self.events.send(Event::Disconnected(remote)).unwrap();
+        }
 
         Ok(())
     }
+}
+
+async fn send_ping(connection: &Connection) -> anyhow::Result<Duration> {
+    let start = Instant::now();
+
+    let (mut send, mut recv) = connection.open_bi().await?;
+    send.write_all(PING).await?;
+    send.finish()?;
+
+    let response = recv.read_to_end(PONG.len()).await?;
+    ensure!(response == PONG, "expected a pong response");
+
+    Ok(start.elapsed())
+}
+
+async fn answer_ping(connection: &Connection) -> anyhow::Result<()> {
+    let (mut send, mut recv) = connection.accept_bi().await?;
+
+    let request = recv.read_to_end(PING.len()).await?;
+    ensure!(request == PING, "expected a ping request");
+
+    send.write_all(PONG).await?;
+    send.finish()?;
+
+    Ok(())
 }
 
 pub struct Service {
@@ -68,65 +157,60 @@ pub struct Service {
 
 #[derive(Debug)]
 pub enum Event {
+    Connected(PublicKey),
     Ping(PublicKey),
+    Pong(PublicKey, Duration),
+    Disconnected(PublicKey),
+    Error(String),
 }
 
 #[derive(Debug)]
 pub enum Payload {
     TicketNew(Sender<String>),
     TicketJoin(String),
+    TicketPing,
+    TicketClose,
 }
 
 impl Service {
     pub fn new() -> Self {
-        let (server_tx, client_rx) = unbounded_channel();
-        let (client_tx, mut server_rx) = unbounded_channel();
+        let (events_tx, events_rx) = unbounded_channel();
+        let (payloads_tx, mut payloads_rx) = unbounded_channel();
 
         tokio::spawn(async move {
-            let endpoint = Endpoint::builder(presets::N0)
-                .bind()
-                .await
-                .expect("failed to bind endpoint");
+            let endpoint = Endpoint::builder(presets::N0).bind().await.unwrap();
             endpoint.online().await;
-            info!("binded at {}", endpoint.id().fmt_short());
 
-            let pingpong = PingPong {
+            let session = Session {
                 endpoint: endpoint.clone(),
-                client_tx: server_tx,
+                events: events_tx,
+                peer: Arc::default(),
             };
 
-            let _router = Router::builder(endpoint.clone())
-                .accept(ALPN, pingpong.clone())
+            let _router = Router::builder(endpoint)
+                .accept(ALPN, session.clone())
                 .spawn();
 
-            while let Some(payload) = server_rx.recv().await {
-                match payload {
-                    Payload::TicketNew(chan) => {
-                        let ticket = EndpointTicket::new(endpoint.addr());
-                        info!("generated ticket: {}", ticket);
+            while let Some(payload) = payloads_rx.recv().await {
+                let result = match payload {
+                    Payload::TicketNew(chan) => session.ticket_new(chan).await,
+                    Payload::TicketJoin(ticket) => session.ticket_join(&ticket).await,
+                    Payload::TicketPing => session.ticket_ping(),
+                    Payload::TicketClose => session.ticket_close(),
+                };
 
-                        chan.send(ticket.to_string())
-                            .await
-                            .expect("failed to return ticket");
-                    }
-                    Payload::TicketJoin(ticket) => {
-                        let ticket = EndpointTicket::from_str(&ticket)
-                            .expect("failed to deserialize ticket");
-                        if let Err(err) = pingpong.ping(ticket.clone()).await {
-                            error!(
-                                "failed to ping peer {}: {:#}",
-                                ticket.endpoint_addr().id.fmt_short(),
-                                err
-                            )
-                        }
-                    }
+                if let Err(err) = result {
+                    session
+                        .events
+                        .send(Event::Error(format!("{:#}", err)))
+                        .unwrap();
                 }
             }
         });
 
         Service {
-            incoming: UnboundedReceiverStream::new(client_rx),
-            server_tx: client_tx,
+            incoming: UnboundedReceiverStream::new(events_rx),
+            server_tx: payloads_tx,
         }
     }
 }

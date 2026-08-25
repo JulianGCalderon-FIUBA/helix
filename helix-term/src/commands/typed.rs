@@ -3008,6 +3008,40 @@ fn ticket_join(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> 
     Ok(())
 }
 
+fn ticket_ping(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    cx.editor
+        .p2p_service
+        .server_tx
+        .send(p2p::Payload::TicketPing)
+        .expect("p2p service should be running");
+    Ok(())
+}
+
+fn ticket_close(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    cx.editor
+        .p2p_service
+        .server_tx
+        .send(p2p::Payload::TicketClose)
+        .expect("p2p service should be running");
+    Ok(())
+}
+
 /// This command accepts a single boolean --skip-visible flag and no positionals.
 const BUFFER_CLOSE_OTHERS_SIGNATURE: Signature = Signature {
     positionals: (0, Some(0)),
@@ -4174,6 +4208,28 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (1, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "ticket-ping",
+        aliases: &[],
+        doc: "Pings the peer of the current collaborative session.",
+        fun: ticket_ping,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "ticket-close",
+        aliases: &[],
+        doc: "Leaves the current collaborative session.",
+        fun: ticket_close,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
             ..Signature::DEFAULT
         },
     },
