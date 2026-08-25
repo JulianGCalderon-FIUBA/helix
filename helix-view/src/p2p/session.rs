@@ -11,7 +11,7 @@
 //! later.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     str::FromStr,
     sync::{Arc, Mutex},
 };
@@ -48,6 +48,9 @@ pub struct Session {
     endpoint: Endpoint,
     events: UnboundedSender<Event>,
     peers: Arc<Mutex<HashMap<EndpointId, Peer>>>,
+    /// Peers with a dial in flight. Two welcomes can name the same peer, and
+    /// dialing it twice would leave us with two connections to it.
+    dialing: Arc<Mutex<HashSet<EndpointId>>>,
 }
 
 impl Session {
@@ -56,6 +59,7 @@ impl Session {
             endpoint,
             events,
             peers: Arc::default(),
+            dialing: Arc::default(),
         }
     }
 
@@ -115,9 +119,8 @@ impl Session {
 
     /// Reports the peers currently in the session.
     pub fn ticket_peers(&self) -> Result<()> {
-        let mut peers: Vec<_> = self.peers.lock().unwrap().keys().copied().collect();
+        let peers: Vec<_> = self.peers.lock().unwrap().keys().copied().collect();
         ensure!(!peers.is_empty(), "not in a session");
-        peers.sort();
 
         self.emit(Event::Peers(peers));
 
@@ -140,13 +143,19 @@ impl Session {
     /// Dials a peer, unless it is us or one we already have.
     fn connect(&self, addr: EndpointAddr) {
         let id = addr.id;
-        if id == self.id() || self.peers.lock().unwrap().contains_key(&id) {
+        if id == self.id()
+            || self.peers.lock().unwrap().contains_key(&id)
+            || !self.dialing.lock().unwrap().insert(id)
+        {
             return;
         }
 
         let session = self.clone();
         tokio::spawn(async move {
-            if let Err(err) = session.dial(addr).await {
+            let result = session.dial(addr).await;
+            session.dialing.lock().unwrap().remove(&id);
+
+            if let Err(err) = result {
                 session.report(format!(
                     "failed to connect to {}: {:#}",
                     id.fmt_short(),
@@ -160,13 +169,7 @@ impl Session {
         let connection = self.endpoint.connect(addr.clone(), ALPN).await?;
         let (mut send, mut recv) = connection.open_bi().await?;
 
-        proto::write(
-            &mut send,
-            &Message::Hello {
-                addr: self.endpoint.addr(),
-            },
-        )
-        .await?;
+        proto::write(&mut send, &Message::Hello).await?;
 
         let Some(Message::Welcome { peers }) = proto::read(&mut recv).await? else {
             bail!("expected a welcome");
@@ -178,6 +181,7 @@ impl Session {
             self.connect(peer);
         }
 
+        let addr = self.remote_addr(addr.id).await;
         self.serve(addr, connection, send, recv).await;
 
         Ok(())
@@ -186,13 +190,9 @@ impl Session {
     async fn answer(&self, connection: Connection) -> Result<()> {
         let (mut send, mut recv) = connection.accept_bi().await?;
 
-        let Some(Message::Hello { addr }) = proto::read(&mut recv).await? else {
+        let Some(Message::Hello) = proto::read(&mut recv).await? else {
             bail!("expected a hello");
         };
-        ensure!(
-            addr.id == connection.remote_id(),
-            "hello does not match the connection it arrived on"
-        );
 
         proto::write(
             &mut send,
@@ -204,6 +204,7 @@ impl Session {
 
         // The newcomer dials the rest of the session itself, so there is
         // nothing left for us to do but talk to it.
+        let addr = self.remote_addr(connection.remote_id()).await;
         self.serve(addr, connection, send, recv).await;
 
         Ok(())
@@ -270,7 +271,7 @@ impl Session {
             Message::Data(data) => self.emit(Event::Message { from, data }),
             // The handshake is over; seeing it again means the peer is
             // speaking a protocol we do not.
-            Message::Hello { .. } | Message::Welcome { .. } => self.report(format!(
+            Message::Hello | Message::Welcome { .. } => self.report(format!(
                 "unexpected handshake message from {}",
                 from.fmt_short()
             )),
@@ -297,6 +298,16 @@ impl Session {
 
         connection.close(BYE.into(), b"bye");
         self.emit(Event::Disconnected(id));
+    }
+
+    /// The address our endpoint knows for a peer, which is what the rest of
+    /// the session needs in order to dial it.
+    async fn remote_addr(&self, id: EndpointId) -> EndpointAddr {
+        let Some(info) = self.endpoint.remote_info(id).await else {
+            return EndpointAddr::new(id);
+        };
+
+        EndpointAddr::from_parts(info.id(), info.into_addrs().map(|addr| addr.into_addr()))
     }
 
     fn addrs(&self) -> Vec<EndpointAddr> {

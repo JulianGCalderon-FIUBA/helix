@@ -22,8 +22,9 @@ const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
 /// A message exchanged over the session stream.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
-    /// First frame of the stream, sent by the peer that dialed.
-    Hello { addr: EndpointAddr },
+    /// First frame of the stream. The dialer has to write before the peer
+    /// sees the stream at all, and its address is already on the connection.
+    Hello,
     /// Answer to [`Message::Hello`], listing the rest of the session.
     Welcome { peers: Vec<EndpointAddr> },
     /// A payload for the layer above, which this one does not interpret.
