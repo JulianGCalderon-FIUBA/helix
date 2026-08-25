@@ -2977,12 +2977,7 @@ fn ticket_new(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> 
     cx.jobs.callback(async move {
         let ticket = rx.recv().await.expect("ticket should be returned");
         Ok(job::Callback::EditorCompositor(Box::new(
-            move |editor: &mut Editor, compositor: &mut Compositor| {
-                // Show ticket in popup.
-                let contents = ui::Markdown::new(ticket.clone(), editor.syn_loader.clone());
-                let popup = Popup::new("ticket", contents).auto_close(true);
-                compositor.replace_or_push("ticket", popup);
-                // Update status line.
+            move |editor: &mut Editor, _: &mut Compositor| {
                 let register = editor.selected_register.unwrap_or('+');
                 match editor.registers.write(register, vec![ticket]) {
                     Ok(_) => editor.set_status(format!("yanked ticket to register {register}",)),
@@ -3000,14 +2995,14 @@ fn ticket_join(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> 
         return Ok(());
     }
 
+    let ticket = args
+        .first()
+        .expect("command should have argument")
+        .to_string();
     cx.editor
         .p2p_service
         .server_tx
-        .send(p2p::Request::TicketJoin(
-            args.first()
-                .expect("command should have argument")
-                .to_string(),
-        ))
+        .send(p2p::Request::TicketJoin(ticket))
         .expect("p2p service should be running");
     Ok(())
 }
@@ -3017,7 +3012,7 @@ fn ticket_send(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> 
         return Ok(());
     }
 
-    let data = args
+    let message = args
         .first()
         .expect("command should have argument")
         .as_bytes()
@@ -3025,7 +3020,7 @@ fn ticket_send(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> 
     cx.editor
         .p2p_service
         .server_tx
-        .send(p2p::Request::Broadcast(data))
+        .send(p2p::Request::Broadcast(message))
         .expect("p2p service should be running");
     Ok(())
 }
@@ -3039,11 +3034,32 @@ fn ticket_peers(
         return Ok(());
     }
 
+    let (tx, mut rx) = channel(1);
     cx.editor
         .p2p_service
         .server_tx
-        .send(p2p::Request::TicketPeers)
+        .send(p2p::Request::TicketPeers(tx))
         .expect("p2p service should be running");
+    cx.jobs.callback(async move {
+        let peers = rx.recv().await.expect("peers should be returned");
+        Ok(job::Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                let contents = ui::Markdown::new(
+                    format!(
+                        "peers: {}",
+                        peers
+                            .iter()
+                            .map(|endpoint| endpoint.fmt_short().to_string())
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    ),
+                    editor.syn_loader.clone(),
+                );
+                let popup = Popup::new("peers", contents).auto_close(true);
+                compositor.replace_or_push("peers", popup);
+            },
+        )))
+    });
     Ok(())
 }
 

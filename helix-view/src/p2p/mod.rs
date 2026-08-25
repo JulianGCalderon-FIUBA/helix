@@ -20,7 +20,6 @@ pub const ALPN: &[u8] = b"helix/session/0";
 pub enum Event {
     Connected(EndpointId),
     Disconnected(EndpointId),
-    Peers(Vec<EndpointId>),
     Message { from: EndpointId, data: Vec<u8> },
     Error(String),
 }
@@ -30,7 +29,7 @@ pub enum Event {
 pub enum Request {
     TicketNew(Sender<String>),
     TicketJoin(String),
-    TicketPeers,
+    TicketPeers(Sender<Vec<EndpointId>>),
     TicketClose,
     Broadcast(Vec<u8>),
 }
@@ -65,13 +64,16 @@ impl Service {
                         Ok(())
                     }
                     Request::TicketJoin(ticket) => session.ticket_join(&ticket),
-                    Request::TicketPeers => session.ticket_peers(),
+                    Request::TicketPeers(chan) => {
+                        let _ = chan.send(session.ticket_peers()).await;
+                        Ok(())
+                    }
                     Request::TicketClose => session.ticket_close(),
                     Request::Broadcast(data) => session.broadcast(data),
                 };
 
                 if let Err(err) = result {
-                    let _ = session.events().send(Event::Error(format!("{:#}", err)));
+                    let _ = session.report(format!("{:#}", err));
                 }
             }
         });

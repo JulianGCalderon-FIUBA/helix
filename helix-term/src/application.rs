@@ -1212,17 +1212,9 @@ impl Application {
                 self.editor
                     .set_status(format!("disconnected with {}", public_key.fmt_short()));
             }
-            p2p::Event::Peers(peers) => {
-                let peers: Vec<String> = peers
-                    .iter()
-                    .map(|peer| peer.fmt_short().to_string())
-                    .collect();
-                self.editor
-                    .set_status(format!("current peers: {}", peers.join(", ")));
-            }
             p2p::Event::Message { from, data } => {
                 self.editor.set_status(format!(
-                    "{} sent {}",
+                    "message from {}: {}",
                     from.fmt_short(),
                     String::from_utf8_lossy(&data)
                 ));

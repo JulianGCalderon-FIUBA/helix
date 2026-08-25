@@ -31,7 +31,7 @@ pub fn encode(message: &Message) -> Result<Vec<u8>> {
     Ok(frame)
 }
 
-pub fn decode(body: &[u8]) -> Result<Message> {
+pub fn decode_body(body: &[u8]) -> Result<Message> {
     Ok(postcard::from_bytes(body)?)
 }
 
@@ -54,5 +54,5 @@ pub async fn read(recv: &mut RecvStream) -> Result<Option<Message>> {
     let mut body = vec![0; length];
     recv.read_exact(&mut body).await?;
 
-    decode(&body).map(Some)
+    decode_body(&body).map(Some)
 }

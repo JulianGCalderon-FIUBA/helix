@@ -2,13 +2,7 @@
 //!
 //! A session is a full mesh: every peer holds one connection to every other
 //! peer. A peer joins by dialing any member with a ticket, and is answered
-//! with the addresses of the rest of the session, which it then dials itself.
-//! Opening connections is always the newcomer's job, so a peer invited by B
-//! ends up connected to A and C without either of them dialing anyone.
-//!
-//! Two peers joining at the same time can still dial each other, since
-//! neither is in the answer the other one gets. Settling that is left for
-//! later.
+//! with the addresses of the rest of the session.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -16,7 +10,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{bail, Result};
 use iroh::{
     endpoint::{Connection, RecvStream, SendStream},
     protocol::{AcceptError, ProtocolHandler},
@@ -30,7 +24,6 @@ use super::{
     Event, ALPN,
 };
 
-/// Close code for leaving a session on purpose.
 const BYE: u32 = 0;
 
 #[derive(Debug)]
@@ -45,8 +38,6 @@ pub struct Session {
     endpoint: Endpoint,
     events: UnboundedSender<Event>,
     peers: Arc<Mutex<HashMap<EndpointId, Peer>>>,
-    /// Peers with a dial in flight. Two welcomes can name the same peer, and
-    /// dialing it twice would leave us with two connections to it.
     dialing: Arc<Mutex<HashSet<EndpointId>>>,
 }
 
@@ -60,77 +51,50 @@ impl Session {
         }
     }
 
-    pub fn events(&self) -> &UnboundedSender<Event> {
-        &self.events
-    }
-
     fn id(&self) -> EndpointId {
         self.endpoint.id()
     }
 
-    fn emit(&self, event: Event) {
-        // The editor is gone once it stops draining events, which is not
-        // something the session can do anything about.
+    pub fn emit(&self, event: Event) {
         let _ = self.events.send(event);
     }
 
-    fn report(&self, error: String) {
+    pub fn report(&self, error: String) {
         self.emit(Event::Error(error));
     }
 
-    /// Every member can invite, so a ticket is just our own address: whoever
-    /// redeems it reaches the whole session through us.
     pub fn ticket_new(&self) -> String {
         EndpointTicket::new(self.endpoint.addr()).to_string()
     }
 
     pub fn ticket_join(&self, ticket: &str) -> Result<()> {
         let ticket = EndpointTicket::from_str(ticket)?;
-        ensure!(
-            ticket.endpoint_addr().id != self.id(),
-            "cannot join our own session"
-        );
-
-        self.connect(ticket.endpoint_addr().clone());
-
+        self.start_connect(ticket.endpoint_addr().clone());
         Ok(())
     }
 
-    /// What the bytes mean is up to the layer above; this one only carries
-    /// them, in order, to everyone currently in the session.
     pub fn broadcast(&self, data: Vec<u8>) -> Result<()> {
         let peers = self.peers.lock().unwrap();
-        ensure!(!peers.is_empty(), "not in a session");
-
         for peer in peers.values() {
             let _ = peer.outbox.send(Message::Data(data.clone()));
         }
-
         Ok(())
     }
 
-    pub fn ticket_peers(&self) -> Result<()> {
-        let peers: Vec<_> = self.peers.lock().unwrap().keys().copied().collect();
-        ensure!(!peers.is_empty(), "not in a session");
-
-        self.emit(Event::Peers(peers));
-
-        Ok(())
+    pub fn ticket_peers(&self) -> Vec<EndpointId> {
+        self.peers.lock().unwrap().keys().copied().collect()
     }
 
     pub fn ticket_close(&self) -> Result<()> {
         let peers = std::mem::take(&mut *self.peers.lock().unwrap());
-        ensure!(!peers.is_empty(), "not in a session");
-
         for (id, peer) in peers {
             peer.connection.close(BYE.into(), b"bye");
             self.emit(Event::Disconnected(id));
         }
-
         Ok(())
     }
 
-    fn connect(&self, addr: EndpointAddr) {
+    fn start_connect(&self, addr: EndpointAddr) {
         let id = addr.id;
         if id == self.id()
             || self.peers.lock().unwrap().contains_key(&id)
@@ -141,9 +105,8 @@ impl Session {
 
         let session = self.clone();
         tokio::spawn(async move {
-            let result = session.dial(addr).await;
+            let result = session.connect(addr).await;
             session.dialing.lock().unwrap().remove(&id);
-
             if let Err(err) = result {
                 session.report(format!(
                     "failed to connect to {}: {:#}",
@@ -154,7 +117,7 @@ impl Session {
         });
     }
 
-    async fn dial(&self, addr: EndpointAddr) -> Result<()> {
+    async fn connect(&self, addr: EndpointAddr) -> Result<()> {
         let connection = self.endpoint.connect(addr.clone(), ALPN).await?;
         let (mut send, mut recv) = connection.open_bi().await?;
 
@@ -171,7 +134,7 @@ impl Session {
         };
 
         for peer in peers {
-            self.connect(peer);
+            self.start_connect(peer);
         }
 
         self.serve(addr, connection, send, recv).await;
@@ -185,10 +148,6 @@ impl Session {
         let Some(Message::Hello { addr }) = proto::read(&mut recv).await? else {
             bail!("expected a hello");
         };
-        ensure!(
-            addr.id == connection.remote_id(),
-            "hello does not match the connection it arrived on"
-        );
 
         proto::write(
             &mut send,
@@ -203,7 +162,6 @@ impl Session {
         Ok(())
     }
 
-    /// Runs until the connection ends.
     async fn serve(
         &self,
         addr: EndpointAddr,
@@ -214,8 +172,15 @@ impl Session {
         let id = addr.id;
         let (outbox, queue) = unbounded_channel();
 
-        self.enter(addr, connection.clone(), outbox);
-        self.write(connection.clone(), send, queue);
+        self.peers.lock().unwrap().insert(
+            addr.id,
+            Peer {
+                addr,
+                connection: connection.clone(),
+                outbox,
+            },
+        );
+        self.start_writer(connection.clone(), send, queue);
         self.emit(Event::Connected(id));
 
         loop {
@@ -224,18 +189,20 @@ impl Session {
                 Ok(None) => break,
                 Err(err) => {
                     if connection.close_reason().is_none() {
-                        self.report(format!("{}: {:#}", id.fmt_short(), err));
+                        self.report(format!("failed to read from {}: {:#}", id.fmt_short(), err));
                     }
                     break;
                 }
             }
         }
 
-        self.leave(id, &connection);
+        if self.peers.lock().unwrap().remove(&id).is_some() {
+            connection.close(BYE.into(), b"bye");
+            self.emit(Event::Disconnected(id));
+        }
     }
 
-    /// Spawns the task draining a peer's outbox into its half of the stream.
-    fn write(
+    fn start_writer(
         &self,
         connection: Connection,
         mut send: SendStream,
@@ -268,28 +235,6 @@ impl Session {
         }
     }
 
-    fn enter(&self, addr: EndpointAddr, connection: Connection, outbox: UnboundedSender<Message>) {
-        self.peers.lock().unwrap().insert(
-            addr.id,
-            Peer {
-                addr,
-                connection,
-                outbox,
-            },
-        );
-    }
-
-    /// Does nothing if the peer is already gone, so that a connection ending
-    /// after `ticket_close` does not report a second disconnect.
-    fn leave(&self, id: EndpointId, connection: &Connection) {
-        if self.peers.lock().unwrap().remove(&id).is_none() {
-            return;
-        }
-
-        connection.close(BYE.into(), b"bye");
-        self.emit(Event::Disconnected(id));
-    }
-
     fn addrs(&self) -> Vec<EndpointAddr> {
         self.peers
             .lock()
@@ -306,7 +251,7 @@ impl ProtocolHandler for Session {
 
         if let Err(err) = self.answer(connection).await {
             self.report(format!(
-                "failed to accept {}: {:#}",
+                "failed to accept connection from {}: {:#}",
                 remote.fmt_short(),
                 err
             ));
