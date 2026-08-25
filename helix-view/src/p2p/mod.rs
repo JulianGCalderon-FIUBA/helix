@@ -73,7 +73,7 @@ impl Service {
                 };
 
                 if let Err(err) = result {
-                    let _ = session.report(format!("{:#}", err));
+                    session.report(format!("{:#}", err));
                 }
             }
         });
