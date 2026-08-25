@@ -1223,6 +1223,14 @@ impl Application {
                 self.editor
                     .set_status(format!("session ended with {}", public_key.fmt_short()));
             }
+            p2p::Event::Peers(peers) => {
+                let peers: Vec<String> = peers
+                    .iter()
+                    .map(|peer| peer.fmt_short().to_string())
+                    .collect();
+                self.editor
+                    .set_status(format!("session peers: {}", peers.join(", ")));
+            }
             p2p::Event::Error(err) => {
                 self.editor.set_error(err);
             }

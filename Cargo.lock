@@ -2430,6 +2430,7 @@ dependencies = [
  "n0-future",
  "once_cell",
  "parking_lot",
+ "postcard",
  "quickcheck",
  "rand 0.9.5",
  "rustix 1.1.4",

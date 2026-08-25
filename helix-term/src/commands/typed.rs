@@ -3025,6 +3025,23 @@ fn ticket_ping(
     Ok(())
 }
 
+fn ticket_peers(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    cx.editor
+        .p2p_service
+        .server_tx
+        .send(p2p::Payload::TicketPeers)
+        .expect("p2p service should be running");
+    Ok(())
+}
+
 fn ticket_close(
     cx: &mut compositor::Context,
     _args: Args,
@@ -4214,8 +4231,19 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "ticket-ping",
         aliases: &[],
-        doc: "Pings the peer of the current collaborative session.",
+        doc: "Pings every peer of the current collaborative session.",
         fun: ticket_ping,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "ticket-peers",
+        aliases: &[],
+        doc: "Lists the peers of the current collaborative session.",
+        fun: ticket_peers,
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),
