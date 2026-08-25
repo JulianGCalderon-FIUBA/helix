@@ -69,7 +69,17 @@ impl Session {
 
     pub fn ticket_join(&self, ticket: &str) -> Result<()> {
         let ticket = EndpointTicket::from_str(ticket)?;
-        self.start_connect(ticket.endpoint_addr().clone());
+        let addr = ticket.endpoint_addr().clone();
+
+        ensure!(addr.id != self.id(), "cannot join your own session");
+        ensure!(
+            !self.peers.lock().unwrap().contains_key(&addr.id),
+            "already connected to {}",
+            addr.id.fmt_short()
+        );
+
+        self.start_connect(addr);
+
         Ok(())
     }
 
