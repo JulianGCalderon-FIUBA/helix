@@ -17,7 +17,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::Instant,
 };
 
 use anyhow::{bail, ensure, Context, Result};
@@ -49,9 +48,6 @@ struct Peer {
     connection: Connection,
     /// Messages queued for the writer of this connection.
     outbox: UnboundedSender<Message>,
-    /// Pings sent to this peer that have not been answered yet.
-    pings: HashMap<u64, Instant>,
-    next_nonce: u64,
 }
 
 /// The peers we are currently in a session with.
@@ -112,21 +108,6 @@ impl Session {
         );
 
         self.connect(ticket.endpoint_addr().clone());
-
-        Ok(())
-    }
-
-    /// Pings every peer of the session, reporting each round trip separately.
-    pub fn ticket_ping(&self) -> Result<()> {
-        let mut peers = self.peers.lock().unwrap();
-        ensure!(!peers.is_empty(), "not in a session");
-
-        for peer in peers.values_mut() {
-            let nonce = peer.next_nonce;
-            peer.next_nonce += 1;
-            peer.pings.insert(nonce, Instant::now());
-            let _ = peer.outbox.send(Message::Ping { nonce });
-        }
 
         Ok(())
     }
@@ -325,24 +306,6 @@ impl Session {
 
     fn handle(&self, from: EndpointId, message: Message) {
         match message {
-            Message::Ping { nonce } => {
-                self.deliver(from, Message::Pong { nonce });
-                self.emit(Event::Ping(from));
-            }
-            Message::Pong { nonce } => {
-                let rtt = self
-                    .peers
-                    .lock()
-                    .unwrap()
-                    .get_mut(&from)
-                    .and_then(|peer| peer.pings.remove(&nonce))
-                    .map(|sent| sent.elapsed());
-
-                match rtt {
-                    Some(rtt) => self.emit(Event::Pong(from, rtt)),
-                    None => self.report(format!("unexpected pong from {}", from.fmt_short())),
-                }
-            }
             Message::Data(data) => self.emit(Event::Message { from, data }),
             Message::PeerJoined { addr } => self.connect(addr),
             // The handshake is over; seeing it again means the peer is
@@ -388,8 +351,6 @@ impl Session {
                 addr,
                 connection,
                 outbox,
-                pings: HashMap::new(),
-                next_nonce: 0,
             },
         );
 
@@ -416,12 +377,6 @@ impl Session {
             .values()
             .map(|peer| peer.addr.clone())
             .collect()
-    }
-
-    fn deliver(&self, to: EndpointId, message: Message) {
-        if let Some(peer) = self.peers.lock().unwrap().get(&to) {
-            let _ = peer.outbox.send(message);
-        }
     }
 
     fn deliver_all(&self, message: Message) {
@@ -456,7 +411,7 @@ impl ProtocolHandler for Session {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use iroh::endpoint::presets;
     use iroh::protocol::Router;

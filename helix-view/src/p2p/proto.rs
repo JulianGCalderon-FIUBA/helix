@@ -28,10 +28,6 @@ pub enum Message {
     Welcome { peers: Vec<EndpointAddr> },
     /// A peer that joined the session through us.
     PeerJoined { addr: EndpointAddr },
-    /// Round trip probe. The nonce is only meaningful to its sender.
-    Ping { nonce: u64 },
-    /// Answer to [`Message::Ping`], echoing its nonce.
-    Pong { nonce: u64 },
     /// A payload for the layer above, which this one does not interpret.
     Data(Vec<u8>),
 }
@@ -102,14 +98,6 @@ mod tests {
     }
 
     #[test]
-    fn roundtrips_a_ping() {
-        let Message::Ping { nonce } = roundtrip(Message::Ping { nonce: 42 }) else {
-            panic!("expected a ping");
-        };
-        assert_eq!(nonce, 42);
-    }
-
-    #[test]
     fn roundtrips_a_payload() {
         let Message::Data(data) = roundtrip(Message::Data(b"hello".to_vec())) else {
             panic!("expected a payload");
@@ -130,7 +118,7 @@ mod tests {
 
     #[test]
     fn rejects_a_truncated_frame() {
-        let frame = encode(&Message::Ping { nonce: 1 }).unwrap();
+        let frame = encode(&Message::Data(b"hello".to_vec())).unwrap();
         assert!(decode(&frame[4..frame.len() - 1]).is_err());
     }
 }

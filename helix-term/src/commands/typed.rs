@@ -3008,23 +3008,6 @@ fn ticket_join(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> 
     Ok(())
 }
 
-fn ticket_ping(
-    cx: &mut compositor::Context,
-    _args: Args,
-    event: PromptEvent,
-) -> anyhow::Result<()> {
-    if event != PromptEvent::Validate {
-        return Ok(());
-    }
-
-    cx.editor
-        .p2p_service
-        .server_tx
-        .send(p2p::Payload::TicketPing)
-        .expect("p2p service should be running");
-    Ok(())
-}
-
 /// Broadcasts a line of text to the session.
 ///
 /// The session carries opaque bytes, so until documents are shared this is
@@ -4240,17 +4223,6 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (1, Some(1)),
-            ..Signature::DEFAULT
-        },
-    },
-    TypableCommand {
-        name: "ticket-ping",
-        aliases: &[],
-        doc: "Pings every peer of the current collaborative session.",
-        fun: ticket_ping,
-        completer: CommandCompleter::none(),
-        signature: Signature {
-            positionals: (0, Some(0)),
             ..Signature::DEFAULT
         },
     },
