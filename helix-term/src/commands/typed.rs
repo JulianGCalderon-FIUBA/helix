@@ -3022,8 +3022,7 @@ fn ticket_send(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> 
         .expect("command should have argument")
         .as_bytes()
         .to_vec();
-    let _ = cx
-        .editor
+    cx.editor
         .p2p_service
         .server_tx
         .send(p2p::Request::Broadcast(data))
