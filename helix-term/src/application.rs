@@ -1221,8 +1221,6 @@ impl Application {
                     .set_status(format!("current peers: {}", peers.join(", ")));
             }
             p2p::Event::Message { from, data } => {
-                // Payloads have no owner until documents are shared, so for
-                // now they only reach the status line.
                 self.editor.set_status(format!(
                     "{} sent {}",
                     from.fmt_short(),
