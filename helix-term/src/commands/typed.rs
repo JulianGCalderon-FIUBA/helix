@@ -2972,7 +2972,7 @@ fn ticket_new(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> 
     cx.editor
         .p2p_service
         .server_tx
-        .send(p2p::Payload::TicketNew(tx))
+        .send(p2p::Request::TicketNew(tx))
         .expect("p2p service should be running");
     cx.jobs.callback(async move {
         let ticket = rx.recv().await.expect("ticket should be returned");
@@ -3003,23 +3003,31 @@ fn ticket_join(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> 
     cx.editor
         .p2p_service
         .server_tx
-        .send(p2p::Payload::TicketJoin(args.first().unwrap().to_string()))
+        .send(p2p::Request::TicketJoin(
+            args.first()
+                .expect("command should have argument")
+                .to_string(),
+        ))
         .expect("p2p service should be running");
     Ok(())
 }
 
-/// Broadcasts a line of text to the session.
-///
-/// The session carries opaque bytes, so until documents are shared this is
-/// what shows that a payload reaches the other peers at all.
 fn ticket_send(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
     }
 
-    cx.editor
+    let data = args
+        .first()
+        .expect("command should have argument")
+        .as_bytes()
+        .to_vec();
+    let _ = cx
+        .editor
         .p2p_service
-        .broadcast(args.first().unwrap().as_bytes().to_vec());
+        .server_tx
+        .send(p2p::Request::Broadcast(data))
+        .expect("p2p service should be running");
     Ok(())
 }
 
@@ -3035,7 +3043,7 @@ fn ticket_peers(
     cx.editor
         .p2p_service
         .server_tx
-        .send(p2p::Payload::TicketPeers)
+        .send(p2p::Request::TicketPeers)
         .expect("p2p service should be running");
     Ok(())
 }
@@ -3052,7 +3060,7 @@ fn ticket_close(
     cx.editor
         .p2p_service
         .server_tx
-        .send(p2p::Payload::TicketClose)
+        .send(p2p::Request::TicketClose)
         .expect("p2p service should be running");
     Ok(())
 }

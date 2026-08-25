@@ -5,10 +5,6 @@
 //! with the addresses of the rest of the session, which it then dials itself.
 //! The member it dialed tells the others about it, so that a peer invited by
 //! B also ends up connected to A and C.
-//!
-//! At this size a mesh is cheaper than it looks: a session is a handful of
-//! people, and each link gives ordered, lossless delivery for free, which a
-//! partial mesh with a gossip overlay would not.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -19,7 +15,7 @@ use std::{
     },
 };
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{bail, ensure, Result};
 use iroh::{
     endpoint::{Connection, RecvStream, SendStream},
     protocol::{AcceptError, ProtocolHandler},
@@ -123,18 +119,6 @@ impl Session {
         for peer in peers.values() {
             let _ = peer.outbox.send(Message::Data(data.clone()));
         }
-
-        Ok(())
-    }
-
-    /// Sends an opaque payload to a single peer of the session.
-    pub fn send(&self, to: EndpointId, data: Vec<u8>) -> Result<()> {
-        let peers = self.peers.lock().unwrap();
-        let peer = peers
-            .get(&to)
-            .with_context(|| format!("{} is not in the session", to.fmt_short()))?;
-
-        let _ = peer.outbox.send(Message::Data(data));
 
         Ok(())
     }
@@ -562,26 +546,6 @@ mod tests {
 
         for member in &mut members[1..] {
             assert_eq!(member.recv().await, (sender, b"hello".to_vec()));
-        }
-    }
-
-    /// Payloads keep the order the sender wrote them in.
-    #[tokio::test]
-    async fn payloads_arrive_in_order() {
-        let mut members = [Member::spawn().await, Member::spawn().await];
-        members[1]
-            .session
-            .ticket_join(&members[0].session.ticket_new())
-            .unwrap();
-        await_mesh(&members).await;
-
-        let peer = members[1].session.id();
-        for index in 0..100u8 {
-            members[0].session.send(peer, vec![index]).unwrap();
-        }
-
-        for index in 0..100u8 {
-            assert_eq!(members[1].recv().await.1, vec![index]);
         }
     }
 
