@@ -1,7 +1,7 @@
 //! Peer to peer transport for collaboration sessions.
 //!
 //! [`Service`] owns an iroh endpoint on its own task and talks to the editor
-//! over two channels: [`Payload`]s go in, [`Event`]s come out. The editor
+//! over two channels: [`Request`]s go in, [`Event`]s come out. The editor
 //! never touches the network, and this module never looks at documents.
 
 mod proto;
