@@ -26,8 +26,6 @@ pub enum Message {
     Hello { addr: EndpointAddr },
     /// Answer to [`Message::Hello`], listing the rest of the session.
     Welcome { peers: Vec<EndpointAddr> },
-    /// A peer that joined the session through us.
-    PeerJoined { addr: EndpointAddr },
     /// A payload for the layer above, which this one does not interpret.
     Data(Vec<u8>),
 }

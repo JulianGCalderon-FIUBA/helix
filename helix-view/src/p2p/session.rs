@@ -3,16 +3,17 @@
 //! A session is a full mesh: every peer holds one connection to every other
 //! peer. A peer joins by dialing any member with a ticket, and is answered
 //! with the addresses of the rest of the session, which it then dials itself.
-//! The member it dialed tells the others about it, so that a peer invited by
-//! B also ends up connected to A and C.
+//! Opening connections is always the newcomer's job, so a peer invited by B
+//! ends up connected to A and C without either of them dialing anyone.
+//!
+//! Two peers joining at the same time can still dial each other, since
+//! neither is in the answer the other one gets. Settling that is left for
+//! later.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     str::FromStr,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
 };
 
 use anyhow::{bail, ensure, Result};
@@ -31,15 +32,10 @@ use super::{
 
 /// Close code for leaving a session on purpose.
 const BYE: u32 = 0;
-/// Close code for the losing half of a simultaneous dial.
-const DUPLICATE: u32 = 1;
 
 /// A peer of the session, and the stream we talk to it over.
 #[derive(Debug)]
 struct Peer {
-    /// Identifies the connection this peer was entered with, so that a
-    /// connection dropped after being replaced does not evict its successor.
-    token: u64,
     addr: EndpointAddr,
     connection: Connection,
     /// Messages queued for the writer of this connection.
@@ -52,10 +48,6 @@ pub struct Session {
     endpoint: Endpoint,
     events: UnboundedSender<Event>,
     peers: Arc<Mutex<HashMap<EndpointId, Peer>>>,
-    /// Peers with a dial in flight, so that two introductions arriving at
-    /// once do not leave us with two connections to the same peer.
-    dialing: Arc<Mutex<HashSet<EndpointId>>>,
-    tokens: Arc<AtomicU64>,
 }
 
 impl Session {
@@ -64,8 +56,6 @@ impl Session {
             endpoint,
             events,
             peers: Arc::default(),
-            dialing: Arc::default(),
-            tokens: Arc::default(),
         }
     }
 
@@ -147,19 +137,16 @@ impl Session {
         Ok(())
     }
 
-    /// Dials a peer, unless it is us or one we are already talking to.
+    /// Dials a peer, unless it is us or one we already have.
     fn connect(&self, addr: EndpointAddr) {
         let id = addr.id;
-        if id == self.id() || !self.dialing.lock().unwrap().insert(id) {
+        if id == self.id() || self.peers.lock().unwrap().contains_key(&id) {
             return;
         }
 
         let session = self.clone();
         tokio::spawn(async move {
-            let result = session.dial(addr).await;
-            session.dialing.lock().unwrap().remove(&id);
-
-            if let Err(err) = result {
+            if let Err(err) = session.dial(addr).await {
                 session.report(format!(
                     "failed to connect to {}: {:#}",
                     id.fmt_short(),
@@ -170,10 +157,6 @@ impl Session {
     }
 
     async fn dial(&self, addr: EndpointAddr) -> Result<()> {
-        if self.peers.lock().unwrap().contains_key(&addr.id) {
-            return Ok(());
-        }
-
         let connection = self.endpoint.connect(addr.clone(), ALPN).await?;
         let (mut send, mut recv) = connection.open_bi().await?;
 
@@ -195,7 +178,7 @@ impl Session {
             self.connect(peer);
         }
 
-        self.serve(addr, connection, send, recv, Dialed::Us).await;
+        self.serve(addr, connection, send, recv).await;
 
         Ok(())
     }
@@ -219,10 +202,9 @@ impl Session {
         )
         .await?;
 
-        // The newcomer is not a peer yet, so this reaches everyone but it.
-        self.deliver_all(Message::PeerJoined { addr: addr.clone() });
-
-        self.serve(addr, connection, send, recv, Dialed::Them).await;
+        // The newcomer dials the rest of the session itself, so there is
+        // nothing left for us to do but talk to it.
+        self.serve(addr, connection, send, recv).await;
 
         Ok(())
     }
@@ -234,16 +216,11 @@ impl Session {
         connection: Connection,
         send: SendStream,
         mut recv: RecvStream,
-        dialed: Dialed,
     ) {
         let id = addr.id;
         let (outbox, queue) = unbounded_channel();
 
-        let Some(token) = self.enter(addr, connection.clone(), outbox, dialed) else {
-            connection.close(DUPLICATE.into(), b"duplicate");
-            return;
-        };
-
+        self.enter(addr, connection.clone(), outbox);
         self.write(connection.clone(), send, queue);
         self.emit(Event::Connected(id));
 
@@ -261,7 +238,7 @@ impl Session {
             }
         }
 
-        self.leave(id, token, &connection);
+        self.leave(id, &connection);
     }
 
     /// Drains the outbox of a peer into its half of the session stream.
@@ -291,7 +268,6 @@ impl Session {
     fn handle(&self, from: EndpointId, message: Message) {
         match message {
             Message::Data(data) => self.emit(Event::Message { from, data }),
-            Message::PeerJoined { addr } => self.connect(addr),
             // The handshake is over; seeing it again means the peer is
             // speaking a protocol we do not.
             Message::Hello { .. } | Message::Welcome { .. } => self.report(format!(
@@ -301,54 +277,23 @@ impl Session {
         }
     }
 
-    /// Adds a peer to the session, if this connection is the one to keep.
-    ///
-    /// Two peers may dial each other at the same time, leaving them with two
-    /// connections. Both sides keep the one dialed by the lower endpoint id,
-    /// so they agree on which one to drop without having to negotiate.
-    fn enter(
-        &self,
-        addr: EndpointAddr,
-        connection: Connection,
-        outbox: UnboundedSender<Message>,
-        dialed: Dialed,
-    ) -> Option<u64> {
-        let id = addr.id;
-        let preferred = match dialed {
-            Dialed::Us => self.id() < id,
-            Dialed::Them => id < self.id(),
-        };
-
-        let mut peers = self.peers.lock().unwrap();
-        if let Some(previous) = peers.get(&id) {
-            if !preferred {
-                return None;
-            }
-            previous.connection.close(DUPLICATE.into(), b"duplicate");
-        }
-
-        let token = self.tokens.fetch_add(1, Ordering::Relaxed);
-        peers.insert(
-            id,
+    /// Adds a peer to the session.
+    fn enter(&self, addr: EndpointAddr, connection: Connection, outbox: UnboundedSender<Message>) {
+        self.peers.lock().unwrap().insert(
+            addr.id,
             Peer {
-                token,
                 addr,
                 connection,
                 outbox,
             },
         );
-
-        Some(token)
     }
 
-    /// Drops a peer, unless it has already been replaced or removed.
-    fn leave(&self, id: EndpointId, token: u64, connection: &Connection) {
-        let mut peers = self.peers.lock().unwrap();
-        if peers.get(&id).is_none_or(|peer| peer.token != token) {
+    /// Drops a peer, unless it has already been removed.
+    fn leave(&self, id: EndpointId, connection: &Connection) {
+        if self.peers.lock().unwrap().remove(&id).is_none() {
             return;
         }
-        peers.remove(&id);
-        drop(peers);
 
         connection.close(BYE.into(), b"bye");
         self.emit(Event::Disconnected(id));
@@ -362,19 +307,6 @@ impl Session {
             .map(|peer| peer.addr.clone())
             .collect()
     }
-
-    fn deliver_all(&self, message: Message) {
-        for peer in self.peers.lock().unwrap().values() {
-            let _ = peer.outbox.send(message.clone());
-        }
-    }
-}
-
-/// Which side of a connection dialed it.
-#[derive(Debug, Clone, Copy)]
-enum Dialed {
-    Us,
-    Them,
 }
 
 impl ProtocolHandler for Session {
