@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{bail, Result};
+use anyhow::{bail, ensure, Result};
 use iroh::{
     endpoint::{Connection, RecvStream, SendStream},
     protocol::{AcceptError, ProtocolHandler},
@@ -148,6 +148,10 @@ impl Session {
         let Some(Message::Hello { addr }) = proto::read(&mut recv).await? else {
             bail!("expected a hello");
         };
+        ensure!(
+            addr.id == connection.remote_id(),
+            "hello address does not match the connection identity",
+        );
 
         proto::write(
             &mut send,
