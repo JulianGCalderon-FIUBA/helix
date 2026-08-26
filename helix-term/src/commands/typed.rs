@@ -2972,17 +2972,12 @@ fn ticket_new(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> 
     cx.editor
         .p2p_service
         .server_tx
-        .send(p2p::Payload::TicketNew(tx))
+        .send(p2p::Request::TicketNew(tx))
         .expect("p2p service should be running");
     cx.jobs.callback(async move {
         let ticket = rx.recv().await.expect("ticket should be returned");
         Ok(job::Callback::EditorCompositor(Box::new(
-            move |editor: &mut Editor, compositor: &mut Compositor| {
-                // Show ticket in popup.
-                let contents = ui::Markdown::new(ticket.clone(), editor.syn_loader.clone());
-                let popup = Popup::new("ticket", contents).auto_close(true);
-                compositor.replace_or_push("ticket", popup);
-                // Update status line.
+            move |editor: &mut Editor, _: &mut Compositor| {
                 let register = editor.selected_register.unwrap_or('+');
                 match editor.registers.write(register, vec![ticket]) {
                     Ok(_) => editor.set_status(format!("yanked ticket to register {register}",)),
@@ -3000,15 +2995,37 @@ fn ticket_join(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> 
         return Ok(());
     }
 
+    let ticket = args
+        .first()
+        .expect("command should have argument")
+        .to_string();
     cx.editor
         .p2p_service
         .server_tx
-        .send(p2p::Payload::TicketJoin(args.first().unwrap().to_string()))
+        .send(p2p::Request::TicketJoin(ticket))
         .expect("p2p service should be running");
     Ok(())
 }
 
-fn ticket_ping(
+fn ticket_send(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    let message = args
+        .first()
+        .expect("command should have argument")
+        .as_bytes()
+        .to_vec();
+    cx.editor
+        .p2p_service
+        .server_tx
+        .send(p2p::Request::Broadcast(message))
+        .expect("p2p service should be running");
+    Ok(())
+}
+
+fn ticket_peers(
     cx: &mut compositor::Context,
     _args: Args,
     event: PromptEvent,
@@ -3017,11 +3034,32 @@ fn ticket_ping(
         return Ok(());
     }
 
+    let (tx, mut rx) = channel(1);
     cx.editor
         .p2p_service
         .server_tx
-        .send(p2p::Payload::TicketPing)
+        .send(p2p::Request::TicketPeers(tx))
         .expect("p2p service should be running");
+    cx.jobs.callback(async move {
+        let peers = rx.recv().await.expect("peers should be returned");
+        Ok(job::Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                let contents = ui::Markdown::new(
+                    format!(
+                        "peers: {}",
+                        peers
+                            .iter()
+                            .map(|endpoint| endpoint.fmt_short().to_string())
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    ),
+                    editor.syn_loader.clone(),
+                );
+                let popup = Popup::new("peers", contents).auto_close(true);
+                compositor.replace_or_push("peers", popup);
+            },
+        )))
+    });
     Ok(())
 }
 
@@ -3037,7 +3075,7 @@ fn ticket_close(
     cx.editor
         .p2p_service
         .server_tx
-        .send(p2p::Payload::TicketClose)
+        .send(p2p::Request::TicketClose)
         .expect("p2p service should be running");
     Ok(())
 }
@@ -4212,10 +4250,22 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         },
     },
     TypableCommand {
-        name: "ticket-ping",
+        name: "ticket-send",
         aliases: &[],
-        doc: "Pings the peer of the current collaborative session.",
-        fun: ticket_ping,
+        doc: "Sends a message to every peer of the current collaborative session.",
+        fun: ticket_send,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (1, Some(1)),
+            raw_after: Some(0),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "ticket-peers",
+        aliases: &[],
+        doc: "Lists the peers of the current collaborative session.",
+        fun: ticket_peers,
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),

@@ -1206,22 +1206,18 @@ impl Application {
         match event {
             p2p::Event::Connected(public_key) => {
                 self.editor
-                    .set_status(format!("session started with {}", public_key.fmt_short()));
-            }
-            p2p::Event::Ping(public_key) => {
-                self.editor
-                    .set_status(format!("pinged by {}", public_key.fmt_short()));
-            }
-            p2p::Event::Pong(public_key, rtt) => {
-                self.editor.set_status(format!(
-                    "ponged by {} in {}ms",
-                    public_key.fmt_short(),
-                    rtt.as_millis()
-                ));
+                    .set_status(format!("connected with {}", public_key.fmt_short()));
             }
             p2p::Event::Disconnected(public_key) => {
                 self.editor
-                    .set_status(format!("session ended with {}", public_key.fmt_short()));
+                    .set_status(format!("disconnected with {}", public_key.fmt_short()));
+            }
+            p2p::Event::Message { from, data } => {
+                self.editor.set_status(format!(
+                    "message from {}: {}",
+                    from.fmt_short(),
+                    String::from_utf8_lossy(&data)
+                ));
             }
             p2p::Event::Error(err) => {
                 self.editor.set_error(err);
