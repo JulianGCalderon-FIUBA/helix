@@ -15,8 +15,18 @@ const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
-    Hello { addr: EndpointAddr },
-    Welcome { peers: Vec<EndpointAddr> },
+    Hello {
+        addr: EndpointAddr,
+    },
+    Welcome {
+        peers: Vec<EndpointAddr>,
+    },
+    /// Who the sender is connected to. A peer that is missing one of them
+    /// dials it, which is how the mesh closes a hole it was left with.
+    Peers {
+        peers: Vec<EndpointAddr>,
+    },
+    /// The layer above's to interpret.
     Data(Vec<u8>),
 }
 
