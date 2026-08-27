@@ -1,9 +1,3 @@
-//! Membership of a collaboration session.
-//!
-//! A session is a full mesh: every peer holds one connection to every other
-//! peer. A peer joins by dialing any member with a ticket, and is answered
-//! with the addresses of the rest of the session.
-
 use std::{
     collections::{HashMap, HashSet},
     str::FromStr,
@@ -60,14 +54,15 @@ impl Session {
     }
 
     pub fn report(&self, error: String) {
+        log::error!("{error}");
         self.emit(Event::Error(error));
     }
 
-    pub fn ticket_new(&self) -> String {
+    pub fn ticket(&self) -> String {
         EndpointTicket::new(self.endpoint.addr()).to_string()
     }
 
-    pub fn ticket_join(&self, ticket: &str) -> Result<()> {
+    pub fn join(&self, ticket: &str) -> Result<()> {
         let ticket = EndpointTicket::from_str(ticket)?;
         let addr = ticket.endpoint_addr().clone();
 
@@ -93,17 +88,17 @@ impl Session {
         Ok(())
     }
 
-    pub fn ticket_peers(&self) -> Vec<EndpointId> {
+    pub fn peers(&self) -> Vec<EndpointId> {
         self.peers.lock().unwrap().keys().copied().collect()
     }
 
-    pub fn ticket_close(&self) -> Result<()> {
+    pub fn close(&self) {
         let peers = std::mem::take(&mut *self.peers.lock().unwrap());
         for (id, peer) in peers {
             peer.connection.close(BYE.into(), b"bye");
+            log::info!("disconnected from {}", id.fmt_short());
             self.emit(Event::Disconnected(id));
         }
-        Ok(())
     }
 
     fn start_connect(&self, addr: EndpointAddr) {
@@ -197,6 +192,7 @@ impl Session {
             },
         );
         self.start_writer(connection.clone(), send, queue);
+        log::info!("connected to {}", id.fmt_short());
         self.emit(Event::Connected(id));
 
         loop {
@@ -214,6 +210,7 @@ impl Session {
 
         if self.peers.lock().unwrap().remove(&id).is_some() {
             connection.close(BYE.into(), b"bye");
+            log::info!("disconnected from {}", id.fmt_short());
             self.emit(Event::Disconnected(id));
         }
     }

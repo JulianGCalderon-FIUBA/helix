@@ -1,9 +1,3 @@
-//! Peer to peer transport for collaboration sessions.
-//!
-//! [`Service`] owns an iroh endpoint on its own task and talks to the editor
-//! over two channels: [`Request`]s go in, [`Event`]s come out. The editor
-//! never touches the network, and this module never looks at documents.
-
 mod proto;
 mod session;
 
@@ -15,7 +9,6 @@ use session::Session;
 
 pub const ALPN: &[u8] = b"helix/session/0";
 
-/// Something that happened in the session, for the editor to render.
 #[derive(Debug)]
 pub enum Event {
     Connected(EndpointId),
@@ -24,25 +17,24 @@ pub enum Event {
     Error(String),
 }
 
-/// Something for the session to do, asked for by the editor.
 #[derive(Debug)]
 pub enum Request {
-    TicketNew(Sender<String>),
-    TicketJoin(String),
-    TicketPeers(Sender<Vec<EndpointId>>),
-    TicketClose,
+    Ticket(Sender<String>),
+    Join(String),
+    Peers(Sender<Vec<EndpointId>>),
+    Close,
     Broadcast(Vec<u8>),
 }
 
 pub struct Service {
-    pub incoming: UnboundedReceiverStream<Event>,
-    pub server_tx: UnboundedSender<Request>,
+    pub events: UnboundedReceiverStream<Event>,
+    pub requests: UnboundedSender<Request>,
 }
 
 impl Service {
     pub fn new() -> Self {
         let (events_tx, events_rx) = unbounded_channel();
-        let (payloads_tx, mut payloads_rx) = unbounded_channel();
+        let (requests_tx, mut requests_rx) = unbounded_channel();
 
         tokio::spawn(async move {
             let endpoint = Endpoint::builder(presets::N0)
@@ -50,6 +42,7 @@ impl Service {
                 .await
                 .expect("failed to bind the endpoint");
             endpoint.online().await;
+            log::info!("listening as {}", endpoint.id().fmt_short());
 
             let session = Session::new(endpoint.clone(), events_tx);
 
@@ -57,18 +50,21 @@ impl Service {
                 .accept(ALPN, session.clone())
                 .spawn();
 
-            while let Some(payload) = payloads_rx.recv().await {
-                let result = match payload {
-                    Request::TicketNew(chan) => {
-                        let _ = chan.send(session.ticket_new()).await;
-                        Ok(())
+            while let Some(request) = requests_rx.recv().await {
+                let result = match request {
+                    Request::Ticket(chan) => {
+                        let _ = chan.send(session.ticket()).await;
+                        continue;
                     }
-                    Request::TicketJoin(ticket) => session.ticket_join(&ticket),
-                    Request::TicketPeers(chan) => {
-                        let _ = chan.send(session.ticket_peers()).await;
-                        Ok(())
+                    Request::Join(ticket) => session.join(&ticket),
+                    Request::Peers(chan) => {
+                        let _ = chan.send(session.peers()).await;
+                        continue;
                     }
-                    Request::TicketClose => session.ticket_close(),
+                    Request::Close => {
+                        session.close();
+                        continue;
+                    }
                     Request::Broadcast(data) => session.broadcast(data),
                 };
 
@@ -79,8 +75,8 @@ impl Service {
         });
 
         Service {
-            incoming: UnboundedReceiverStream::new(events_rx),
-            server_tx: payloads_tx,
+            events: UnboundedReceiverStream::new(events_rx),
+            requests: requests_tx,
         }
     }
 }
