@@ -2492,8 +2492,8 @@ impl Editor {
                 Some(event) = self.debug_adapters.incoming.next() => {
                     return EditorEvent::DebuggerEvent(event)
                 }
-                Some(ping) = self.p2p_service.incoming.next() => {
-                    return EditorEvent::P2pEvent(ping)
+                Some(event) = self.p2p_service.events.next() => {
+                    return EditorEvent::P2pEvent(event)
                 }
 
                 _ = helix_event::redraw_requested() => {

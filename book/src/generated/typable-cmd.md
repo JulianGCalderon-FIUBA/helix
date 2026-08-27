@@ -100,8 +100,8 @@
 | `:workspace-trust` | Allow language servers and local config for the current workspace. |
 | `:workspace-untrust` | Revoke the current workspace's trust grant or exclusion. |
 | `:workspace-exclude` | Mark the current workspace as never-prompt. Never prompts for trust again. |
-| `:ticket-new` | Creates a ticket for the collaborative session and yanks it into the system clipboard. |
-| `:ticket-join` | Joins a collaborative session with the given ticket. |
-| `:ticket-send` | Sends a message to every peer of the current collaborative session. |
-| `:ticket-peers` | Lists the peers of the current collaborative session. |
-| `:ticket-close` | Leaves the current collaborative session. |
+| `:session-new` | Create a ticket for the collaborative session and yank it into system clipboard. |
+| `:session-join` | Join a collaborative session with the given ticket. |
+| `:session-send` | Send a message to every peer of the current collaborative session. |
+| `:session-peers` | List the peers of the current collaborative session. |
+| `:session-close` | Leave the current collaborative session. |

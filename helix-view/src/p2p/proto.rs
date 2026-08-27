@@ -1,9 +1,3 @@
-//! Format spoken between the peers of a collaboration session.
-//!
-//! Every connection carries a single bidirectional stream, over which both peers
-//! exchange a sequence of frames. A frame is a little endian u32 length followed
-//! by that many bytes of postcard.
-
 use anyhow::{ensure, Result};
 use iroh::{
     endpoint::{ReadExactError, RecvStream, SendStream},
@@ -11,7 +5,7 @@ use iroh::{
 };
 use serde::{Deserialize, Serialize};
 
-const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
+const MAX_BODY_SIZE: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
@@ -22,7 +16,7 @@ pub enum Message {
 
 pub fn encode(message: &Message) -> Result<Vec<u8>> {
     let body = postcard::to_stdvec(message)?;
-    ensure!(body.len() <= MAX_FRAME_SIZE, "message is too big");
+    ensure!(body.len() <= MAX_BODY_SIZE, "message is too big");
 
     let mut frame = Vec::with_capacity(4 + body.len());
     frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
@@ -49,7 +43,7 @@ pub async fn read(recv: &mut RecvStream) -> Result<Option<Message>> {
     }
 
     let length = u32::from_le_bytes(length) as usize;
-    ensure!(length <= MAX_FRAME_SIZE, "frame is too big");
+    ensure!(length <= MAX_BODY_SIZE, "body is too big");
 
     let mut body = vec![0; length];
     recv.read_exact(&mut body).await?;

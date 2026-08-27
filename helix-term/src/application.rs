@@ -1204,13 +1204,13 @@ impl Application {
 
     pub async fn handle_p2p_event(&mut self, event: p2p::Event) {
         match event {
-            p2p::Event::Connected(public_key) => {
+            p2p::Event::Connected(peer) => {
                 self.editor
-                    .set_status(format!("connected with {}", public_key.fmt_short()));
+                    .set_status(format!("connected with {}", peer.fmt_short()));
             }
-            p2p::Event::Disconnected(public_key) => {
+            p2p::Event::Disconnected(peer) => {
                 self.editor
-                    .set_status(format!("disconnected with {}", public_key.fmt_short()));
+                    .set_status(format!("disconnected with {}", peer.fmt_short()));
             }
             p2p::Event::Message { from, data } => {
                 self.editor.set_status(format!(
