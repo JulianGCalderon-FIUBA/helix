@@ -12,7 +12,6 @@ use crate::{transaction::Operation, ChangeSet, Rope, Transaction};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RemoteOperation {
     Insert { insertion: Insertion, text: String },
-    // `cola::` qualified: `helix_core` has its own `Deletion`.
     Delete(cola::Deletion),
 }
 
