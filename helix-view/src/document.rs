@@ -1672,20 +1672,6 @@ impl Document {
         success
     }
 
-    /// Detaches the replica for the body of `f`, so the change hook skips the
-    /// document and remote edits are not echoed back around the mesh.
-    /// `FnOnce` on purpose: an `.await` in there would drop keystrokes from
-    /// the CRDT while still landing them in the rope.
-    pub fn with_crdt_detached<T>(
-        &mut self,
-        f: impl FnOnce(&mut Self, &mut Replica) -> T,
-    ) -> Option<T> {
-        let mut crdt = self.crdt.take()?;
-        let out = f(self, &mut crdt);
-        self.crdt = Some(crdt);
-        Some(out)
-    }
-
     /// Apply a [`Transaction`] to the [`Document`] to change its text.
     pub fn apply(&mut self, transaction: &Transaction, view_id: ViewId) -> bool {
         self.apply_inner(transaction, view_id, true)

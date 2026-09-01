@@ -1243,11 +1243,15 @@ impl Application {
                     }
 
                     Message::Edit(op) => {
-                        doc.with_crdt_detached(|doc, crdt| {
-                            if let Some(transaction) = crdt.from_remote(doc.text(), &op) {
-                                doc.apply(&transaction, view_id);
-                            }
-                        });
+                        // Out of the document for the apply, so the change
+                        // hook skips it instead of echoing it back.
+                        let Some(mut crdt) = doc.crdt.take() else {
+                            return;
+                        };
+                        if let Some(transaction) = crdt.from_remote(doc.text(), &op) {
+                            doc.apply(&transaction, view_id);
+                        }
+                        doc.crdt = Some(crdt);
                     }
 
                     Message::Hello { .. } | Message::Welcome { .. } => {}
