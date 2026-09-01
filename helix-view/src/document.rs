@@ -34,6 +34,7 @@ use std::sync::{Arc, Weak};
 use std::time::SystemTime;
 
 use helix_core::{
+    crdt::DocReplica,
     editor_config::EditorConfig,
     encoding,
     history::{History, State, UndoKind},
@@ -191,6 +192,8 @@ pub struct Document {
     // it back as it separated from the edits. We could split out the parts manually but that will
     // be more troublesome.
     pub history: Cell<History>,
+    /// Present only while the document is shared with a session.
+    pub crdt: Option<DocReplica>,
     pub config: Arc<dyn DynAccess<Config>>,
 
     savepoints: Vec<Weak<SavePoint>>,
@@ -754,6 +757,7 @@ impl Document {
             diagnostics: Vec::new(),
             version: 0,
             history: Cell::new(History::default()),
+            crdt: None,
             savepoints: Vec::new(),
             last_saved_time: SystemTime::now(),
             last_saved_revision: 0,
@@ -1667,6 +1671,21 @@ impl Document {
         }
         success
     }
+
+    /// Detaches the replica for the body of `f`, so the change hook skips the
+    /// document and remote edits are not echoed back around the mesh.
+    /// `FnOnce` on purpose: an `.await` in there would drop keystrokes from
+    /// the CRDT while still landing them in the rope.
+    pub fn with_crdt_detached<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self, &mut DocReplica) -> T,
+    ) -> Option<T> {
+        let mut crdt = self.crdt.take()?;
+        let out = f(self, &mut crdt);
+        self.crdt = Some(crdt);
+        Some(out)
+    }
+
     /// Apply a [`Transaction`] to the [`Document`] to change its text.
     pub fn apply(&mut self, transaction: &Transaction, view_id: ViewId) -> bool {
         self.apply_inner(transaction, view_id, true)

@@ -1,4 +1,5 @@
 use anyhow::{ensure, Result};
+use helix_core::crdt::Op;
 use iroh::{
     endpoint::{ReadExactError, RecvStream, SendStream},
     EndpointAddr,
@@ -9,9 +10,19 @@ const MAX_BODY_SIZE: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
-    Hello { addr: EndpointAddr },
-    Welcome { peers: Vec<EndpointAddr> },
-    Data(Vec<u8>),
+    Hello {
+        addr: EndpointAddr,
+    },
+    Welcome {
+        peers: Vec<EndpointAddr>,
+    },
+    /// The initial handoff: the sharer's buffer, plus the encoded replica the
+    /// receiver forks its own from.
+    Share {
+        text: String,
+        replica: Vec<u8>,
+    },
+    Edit(Op),
 }
 
 pub fn encode(message: &Message) -> Result<Vec<u8>> {
