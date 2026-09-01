@@ -1,10 +1,11 @@
-mod proto;
+pub mod proto;
 mod session;
 
 use iroh::{endpoint::presets, protocol::Router, Endpoint, EndpointId};
 use tokio::sync::mpsc::{unbounded_channel, Sender, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+use proto::Message;
 use session::Session;
 
 pub const ALPN: &[u8] = b"helix/session/0";
@@ -13,7 +14,7 @@ pub const ALPN: &[u8] = b"helix/session/0";
 pub enum Event {
     Connected(EndpointId),
     Disconnected(EndpointId),
-    Message { from: EndpointId, data: Vec<u8> },
+    Message { from: EndpointId, message: Message },
     Error(String),
 }
 
@@ -23,7 +24,7 @@ pub enum Request {
     Join(String),
     Peers(Sender<Vec<EndpointId>>),
     Close,
-    Broadcast(Vec<u8>),
+    Broadcast(Message),
 }
 
 pub struct Service {
@@ -65,7 +66,7 @@ impl Service {
                         session.close();
                         continue;
                     }
-                    Request::Broadcast(data) => session.broadcast(data),
+                    Request::Broadcast(message) => session.broadcast(message),
                 };
 
                 if let Err(err) = result {

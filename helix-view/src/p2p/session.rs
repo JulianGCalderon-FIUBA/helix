@@ -78,12 +78,11 @@ impl Session {
         Ok(())
     }
 
-    pub fn broadcast(&self, data: Vec<u8>) -> Result<()> {
+    pub fn broadcast(&self, message: Message) -> Result<()> {
         let peers = self.peers.lock().unwrap();
-        ensure!(!peers.is_empty(), "not in a session");
 
         for peer in peers.values() {
-            let _ = peer.outbox.send(Message::Data(data.clone()));
+            let _ = peer.outbox.send(message.clone());
         }
         Ok(())
     }
@@ -240,7 +239,7 @@ impl Session {
 
     fn handle(&self, from: EndpointId, message: Message) {
         match message {
-            Message::Data(data) => self.emit(Event::Message { from, data }),
+            Message::Share { .. } | Message::Edit(_) => self.emit(Event::Message { from, message }),
             Message::Hello { .. } | Message::Welcome { .. } => self.report(format!(
                 "unexpected handshake message from {}",
                 from.fmt_short()

@@ -1,6 +1,10 @@
 use arc_swap::{access::Map, ArcSwap};
 use futures_util::Stream;
-use helix_core::{diagnostic::Severity, pos_at_coords, syntax, Range, Selection};
+use helix_core::{
+    crdt::{replica_id, Replica},
+    diagnostic::Severity,
+    pos_at_coords, syntax, Range, Selection, Transaction,
+};
 use helix_lsp::{
     lsp::{self, notification::Notification},
     util::lsp_range_to_range,
@@ -12,7 +16,8 @@ use helix_view::{
     document::{DocumentOpenError, DocumentSavedEventResult},
     editor::{ConfigEvent, EditorEvent},
     graphics::Rect,
-    p2p, theme,
+    p2p::{self, proto::Message},
+    theme,
     tree::Layout,
     Align, Editor,
 };
@@ -131,6 +136,7 @@ impl Application {
             handlers,
             workspace_trust,
         );
+        handlers::collab::register_hooks(editor.p2p_service.requests.clone());
         Self::load_configured_theme(&mut editor, &config.load(), &mut terminal, theme_mode);
 
         let keys = Box::new(Map::new(Arc::clone(&config), |config: &Config| {
@@ -1212,12 +1218,44 @@ impl Application {
                 self.editor
                     .set_status(format!("disconnected with {}", peer.fmt_short()));
             }
-            p2p::Event::Message { from, data } => {
-                self.editor.set_status(format!(
-                    "message from {}: {}",
-                    from.fmt_short(),
-                    String::from_utf8_lossy(&data)
-                ));
+            p2p::Event::Message { message, .. } => {
+                let view_id = self.editor.tree.focus;
+                let doc = doc_mut!(self.editor);
+
+                match message {
+                    Message::Share { text, replica } => {
+                        // Attach the replica *after* the swap, or the hook
+                        // broadcasts it straight back to the sharer.
+                        let transaction = Transaction::change(
+                            doc.text(),
+                            [(0, doc.text().len_chars(), Some(text.as_str().into()))].into_iter(),
+                        );
+                        doc.apply(&transaction, view_id);
+
+                        match Replica::decode(replica_id(), &replica) {
+                            Ok(crdt) => doc.crdt = Some(crdt),
+                            Err(err) => {
+                                self.editor.set_error(format!(
+                                    "failed to join the shared document: {err:#}"
+                                ));
+                            }
+                        }
+                    }
+
+                    Message::Edit(op) => {
+                        // Out of the document for the apply, so the change
+                        // hook skips it instead of echoing it back.
+                        let Some(mut crdt) = doc.crdt.take() else {
+                            return;
+                        };
+                        if let Some(transaction) = crdt.from_remote(doc.text(), &op) {
+                            doc.apply(&transaction, view_id);
+                        }
+                        doc.crdt = Some(crdt);
+                    }
+
+                    Message::Hello { .. } | Message::Welcome { .. } => {}
+                }
             }
             p2p::Event::Error(err) => {
                 self.editor.set_error(err);

@@ -1,4 +1,5 @@
 use anyhow::{ensure, Result};
+use helix_core::crdt::RemoteOperation;
 use iroh::{
     endpoint::{ReadExactError, RecvStream, SendStream},
     EndpointAddr,
@@ -11,7 +12,8 @@ const MAX_BODY_SIZE: usize = 16 * 1024 * 1024;
 pub enum Message {
     Hello { addr: EndpointAddr },
     Welcome { peers: Vec<EndpointAddr> },
-    Data(Vec<u8>),
+    Share { text: String, replica: Vec<u8> },
+    Edit(RemoteOperation),
 }
 
 pub fn encode(message: &Message) -> Result<Vec<u8>> {
