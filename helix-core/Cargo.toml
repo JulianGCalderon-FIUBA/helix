@@ -38,6 +38,7 @@ arc-swap = "1"
 regex = "1"
 bitflags.workspace = true
 foldhash.workspace = true
+cola = { version = "0.5", features = ["serde"] }
 
 log = "0.4"
 anyhow = "1.0"
