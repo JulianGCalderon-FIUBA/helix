@@ -1,7 +1,7 @@
 use arc_swap::{access::Map, ArcSwap};
 use futures_util::Stream;
 use helix_core::{
-    crdt::{replica_id, DocReplica},
+    crdt::{replica_id, Replica},
     diagnostic::Severity,
     pos_at_coords, syntax, Range, Selection, Transaction,
 };
@@ -1232,7 +1232,7 @@ impl Application {
                         );
                         doc.apply(&transaction, view_id);
 
-                        match DocReplica::decode(replica_id(), &replica) {
+                        match Replica::decode(replica_id(), &replica) {
                             Ok(crdt) => doc.crdt = Some(crdt),
                             Err(err) => {
                                 self.editor.set_error(format!(

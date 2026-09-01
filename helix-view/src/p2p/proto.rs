@@ -1,5 +1,5 @@
 use anyhow::{ensure, Result};
-use helix_core::crdt::Op;
+use helix_core::crdt::RemoteOperation;
 use iroh::{
     endpoint::{ReadExactError, RecvStream, SendStream},
     EndpointAddr,
@@ -22,7 +22,7 @@ pub enum Message {
         text: String,
         replica: Vec<u8>,
     },
-    Edit(Op),
+    Edit(RemoteOperation),
 }
 
 pub fn encode(message: &Message) -> Result<Vec<u8>> {

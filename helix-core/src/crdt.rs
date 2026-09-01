@@ -6,13 +6,13 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use cola::{EncodedReplica, Insertion, Replica, ReplicaId};
+use cola::{EncodedReplica, Insertion, ReplicaId};
 use serde::{Deserialize, Serialize};
 
 use crate::{transaction::Operation, ChangeSet, Rope, Transaction};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Op {
+pub enum RemoteOperation {
     Insert { insertion: Insertion, text: String },
     // `cola::` qualified: `helix_core` has its own `Deletion`.
     Delete(cola::Deletion),
@@ -29,14 +29,14 @@ pub fn replica_id() -> ReplicaId {
     nanos.max(1)
 }
 
-pub struct DocReplica {
-    replica: Replica,
+pub struct Replica {
+    replica: cola::Replica,
 }
 
-impl DocReplica {
+impl Replica {
     pub fn new(id: ReplicaId, text: &Rope) -> Self {
         Self {
-            replica: Replica::new(id, text.len_chars()),
+            replica: cola::Replica::new(id, text.len_chars()),
         }
     }
 
@@ -46,7 +46,7 @@ impl DocReplica {
     pub fn decode(id: ReplicaId, encoded: &[u8]) -> Result<Self> {
         let encoded = EncodedReplica::from_bytes(encoded);
         Ok(Self {
-            replica: Replica::decode(id, &encoded)?,
+            replica: cola::Replica::decode(id, &encoded)?,
         })
     }
 
@@ -54,7 +54,7 @@ impl DocReplica {
         self.replica.encode().as_bytes().to_vec()
     }
 
-    pub fn from_local(&mut self, changes: &ChangeSet) -> Vec<Op> {
+    pub fn from_local(&mut self, changes: &ChangeSet) -> Vec<RemoteOperation> {
         let mut ops = Vec::new();
         let mut pos = 0;
 
@@ -63,14 +63,14 @@ impl DocReplica {
                 Operation::Retain(n) => pos += n,
                 Operation::Insert(text) => {
                     let len = text.chars().count();
-                    ops.push(Op::Insert {
+                    ops.push(RemoteOperation::Insert {
                         insertion: self.replica.inserted(pos, len),
                         text: text.to_string(),
                     });
                     pos += len;
                 }
                 Operation::Delete(n) => {
-                    ops.push(Op::Delete(self.replica.deleted(pos..pos + n)));
+                    ops.push(RemoteOperation::Delete(self.replica.deleted(pos..pos + n)));
                 }
             }
         }
@@ -79,16 +79,16 @@ impl DocReplica {
     }
 
     /// `None` means cola backlogged the op, not that it failed.
-    pub fn from_remote(&mut self, text: &Rope, op: &Op) -> Option<Transaction> {
+    pub fn from_remote(&mut self, text: &Rope, op: &RemoteOperation) -> Option<Transaction> {
         match op {
-            Op::Insert { insertion, text: s } => {
+            RemoteOperation::Insert { insertion, text: s } => {
                 let at = self.replica.integrate_insertion(insertion)?;
                 Some(Transaction::change(
                     text,
                     [(at, at, Some(s.as_str().into()))].into_iter(),
                 ))
             }
-            Op::Delete(deletion) => {
+            RemoteOperation::Delete(deletion) => {
                 let ranges = self.replica.integrate_deletion(deletion);
                 if ranges.is_empty() {
                     return None;

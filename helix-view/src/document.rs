@@ -34,7 +34,7 @@ use std::sync::{Arc, Weak};
 use std::time::SystemTime;
 
 use helix_core::{
-    crdt::DocReplica,
+    crdt::Replica,
     editor_config::EditorConfig,
     encoding,
     history::{History, State, UndoKind},
@@ -193,7 +193,7 @@ pub struct Document {
     // be more troublesome.
     pub history: Cell<History>,
     /// Present only while the document is shared with a session.
-    pub crdt: Option<DocReplica>,
+    pub crdt: Option<Replica>,
     pub config: Arc<dyn DynAccess<Config>>,
 
     savepoints: Vec<Weak<SavePoint>>,
@@ -1678,7 +1678,7 @@ impl Document {
     /// the CRDT while still landing them in the rope.
     pub fn with_crdt_detached<T>(
         &mut self,
-        f: impl FnOnce(&mut Self, &mut DocReplica) -> T,
+        f: impl FnOnce(&mut Self, &mut Replica) -> T,
     ) -> Option<T> {
         let mut crdt = self.crdt.take()?;
         let out = f(self, &mut crdt);

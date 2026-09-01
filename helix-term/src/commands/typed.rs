@@ -7,7 +7,7 @@ use crate::job::Job;
 use super::*;
 
 use helix_core::command_line::{Args, Flag, Signature, Token, TokenKind};
-use helix_core::crdt::{replica_id, DocReplica};
+use helix_core::crdt::{replica_id, Replica};
 use helix_core::fuzzy::fuzzy_match;
 use helix_core::indent::MAX_INDENT;
 use helix_core::line_ending;
@@ -3027,7 +3027,7 @@ fn session_share(
     }
 
     let doc = doc_mut!(cx.editor);
-    let crdt = DocReplica::new(replica_id(), doc.text());
+    let crdt = Replica::new(replica_id(), doc.text());
     let message = Message::Share {
         text: doc.text().to_string(),
         replica: crdt.encode(),
