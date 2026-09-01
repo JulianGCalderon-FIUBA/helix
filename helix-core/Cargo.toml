@@ -39,6 +39,7 @@ regex = "1"
 bitflags.workspace = true
 foldhash.workspace = true
 cola = { version = "0.5", features = ["serde"] }
+rand = "0.9"
 
 log = "0.4"
 anyhow = "1.0"

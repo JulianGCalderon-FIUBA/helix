@@ -3,8 +3,6 @@
 //! cola counts in whatever unit you decide and never checks. Helix indexes
 //! chars, so every `usize` crossing this boundary is a char index.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use anyhow::Result;
 use cola::{EncodedReplica, Insertion, ReplicaId};
 use serde::{Deserialize, Serialize};
@@ -20,13 +18,8 @@ pub enum RemoteOperation {
 
 /// TODO: derive this from the peer's `EndpointId` so it survives a reconnect.
 pub fn replica_id() -> ReplicaId {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos() as ReplicaId)
-        .unwrap_or_default();
-
     // cola panics on a zero id.
-    nanos.max(1)
+    rand::random_range(1..=ReplicaId::MAX)
 }
 
 pub struct Replica {
