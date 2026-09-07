@@ -31,9 +31,7 @@ impl Replica {
         }
     }
 
-    /// Forks, so `id` must differ from every other replica in the session:
-    /// Cola breaks ties between concurrent insertions by comparing ids, and
-    /// two replicas sharing one silently diverge.
+    /// Forks, so the id must differ from every other replica in the session.
     pub fn decode(id: ReplicaId, encoded: &[u8]) -> Result<Self> {
         let encoded = EncodedReplica::from_bytes(encoded);
         Ok(Self {
@@ -45,6 +43,7 @@ impl Replica {
         self.replica.encode().as_bytes().to_vec()
     }
 
+    /// Translate local transactions to CRDT operations.
     pub fn from_local(&mut self, changes: &ChangeSet) -> Vec<RemoteOperation> {
         let mut ops = Vec::new();
         let mut pos = 0;
@@ -69,26 +68,26 @@ impl Replica {
         ops
     }
 
+    /// Translate CRDT operations to local transactions.
+    ///
     /// `None` means Cola backlogged the op, not that it failed.
     pub fn from_remote(&mut self, text: &Rope, op: &RemoteOperation) -> Option<Transaction> {
-        match op {
+        let transaction = match op {
             RemoteOperation::Insert { insertion, text: s } => {
                 let at = self.replica.integrate_insertion(insertion)?;
-                Some(Transaction::change(
-                    text,
-                    [(at, at, Some(s.as_str().into()))].into_iter(),
-                ))
+                Transaction::change(text, [(at, at, Some(s.as_str().into()))].into_iter())
             }
             RemoteOperation::Delete(deletion) => {
                 let ranges = self.replica.integrate_deletion(deletion);
                 if ranges.is_empty() {
                     return None;
                 }
-                Some(Transaction::delete(
+                Transaction::delete(
                     text,
                     ranges.into_iter().map(|range| (range.start, range.end)),
-                ))
+                )
             }
-        }
+        };
+        Some(transaction.as_remote())
     }
 }

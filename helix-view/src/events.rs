@@ -15,8 +15,6 @@ events! {
         old_text: &'a Rope,
         changes: &'a ChangeSet,
         ghost_transaction: bool,
-        // set when the transaction carried changes received from a remote peer,
-        // so the collaboration hook does not feed them back to the CRDT
         remote_transaction: bool
     }
     DocumentDidClose<'a> {
