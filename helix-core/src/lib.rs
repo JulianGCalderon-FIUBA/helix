@@ -7,6 +7,7 @@ pub mod command_line;
 pub mod comment;
 pub mod completion;
 pub mod config;
+pub mod crdt;
 pub mod diagnostic;
 pub mod diff;
 pub mod doc_formatter;

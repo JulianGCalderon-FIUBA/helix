@@ -442,6 +442,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cola"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "242a0cf7940e81cc943599ce00889a975ca13abacfaff4f11796028193603ece"
+dependencies = [
+ "serde",
+ "sha2 0.10.9",
+ "unsigned-varint",
+ "varint-simd",
+]
+
+[[package]]
 name = "combine"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -744,7 +756,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 2.0.101",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -875,7 +887,7 @@ dependencies = [
  "ed25519",
  "rand_core 0.10.0",
  "serde",
- "sha2",
+ "sha2 0.11.0",
  "signature",
  "subtle",
  "zeroize",
@@ -2172,6 +2184,7 @@ dependencies = [
  "arc-swap",
  "bitflags",
  "chrono",
+ "cola",
  "encoding_rs",
  "foldhash 0.2.0",
  "globset",
@@ -2185,6 +2198,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "quickcheck",
+ "rand 0.9.5",
  "regex",
  "regex-cursor",
  "ropey",
@@ -2256,7 +2270,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "serde",
- "sha2",
+ "sha2 0.11.0",
  "tempfile",
  "threadpool",
  "toml",
@@ -4771,6 +4785,17 @@ checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "sha2"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
@@ -5678,6 +5703,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "unsigned-varint"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb066959b24b5196ae73cb057f45598450d2c5f71460e98c49b738086eff9c06"
+
+[[package]]
 name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5718,6 +5749,15 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "varint-simd"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "655d0cf8bfc2bd1f079e767f7ff613cbfa0ef06ca3ceaf1fd6b6cde08cbd012a"
+dependencies = [
+ "rustc_version",
+]
 
 [[package]]
 name = "version_check"

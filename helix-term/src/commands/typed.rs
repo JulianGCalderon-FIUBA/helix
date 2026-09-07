@@ -7,12 +7,14 @@ use crate::job::Job;
 use super::*;
 
 use helix_core::command_line::{Args, Flag, Signature, Token, TokenKind};
+use helix_core::crdt::{replica_id, Replica};
 use helix_core::fuzzy::fuzzy_match;
 use helix_core::indent::MAX_INDENT;
 use helix_core::line_ending;
 use helix_stdx::path::home_dir;
 use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
 use helix_view::editor::{CloseError, ConfigEvent};
+use helix_view::p2p::proto::Message;
 use helix_view::{expansion, p2p};
 use serde_json::Value;
 use tokio::sync::mpsc::channel;
@@ -3015,20 +3017,23 @@ fn session_join(
     Ok(())
 }
 
-fn session_send(
+fn session_share(
     cx: &mut compositor::Context,
-    args: Args,
+    _args: Args,
     event: PromptEvent,
 ) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
     }
 
-    let message = args
-        .first()
-        .expect("command should have argument")
-        .as_bytes()
-        .to_vec();
+    let doc = doc_mut!(cx.editor);
+    let crdt = Replica::new(replica_id(), doc.text());
+    let message = Message::Share {
+        text: doc.text().to_string(),
+        replica: crdt.encode(),
+    };
+    doc.crdt = Some(crdt);
+
     cx.editor
         .p2p_service
         .requests
@@ -4262,14 +4267,13 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         },
     },
     TypableCommand {
-        name: "session-send",
+        name: "session-share",
         aliases: &[],
-        doc: "Send a message to every peer of the current collaborative session.",
-        fun: session_send,
+        doc: "Share the focused document with every peer of the current collaborative session.",
+        fun: session_share,
         completer: CommandCompleter::none(),
         signature: Signature {
-            positionals: (1, Some(1)),
-            raw_after: Some(0),
+            positionals: (0, Some(0)),
             ..Signature::DEFAULT
         },
     },

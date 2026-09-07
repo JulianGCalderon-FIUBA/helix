@@ -574,6 +574,9 @@ impl ChangeSet {
 pub struct Transaction {
     changes: ChangeSet,
     selection: Option<Selection>,
+    /// Whether transaction carries changes from a remote peer.
+    /// To avoid propagating changes back.
+    remote_transaction: bool,
 }
 
 impl Transaction {
@@ -582,6 +585,7 @@ impl Transaction {
         Self {
             changes: ChangeSet::new(doc.slice(..)),
             selection: None,
+            remote_transaction: false,
         }
     }
 
@@ -593,6 +597,15 @@ impl Transaction {
     /// When set, explicitly updates the selection.
     pub fn selection(&self) -> Option<&Selection> {
         self.selection.as_ref()
+    }
+
+    pub fn is_remote(&self) -> bool {
+        self.remote_transaction
+    }
+
+    pub fn as_remote(mut self) -> Self {
+        self.remote_transaction = true;
+        self
     }
 
     /// Returns true if applied successfully.
@@ -612,6 +625,7 @@ impl Transaction {
         Self {
             changes,
             selection: None,
+            remote_transaction: false,
         }
     }
 
@@ -879,6 +893,7 @@ impl From<ChangeSet> for Transaction {
         Self {
             changes,
             selection: None,
+            remote_transaction: false,
         }
     }
 }
