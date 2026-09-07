@@ -7,7 +7,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 pub fn register_hooks(requests: UnboundedSender<p2p::Request>) {
     register_hook!(move |event: &mut DocumentDidChange<'_>| {
-        if event.ghost_transaction {
+        if event.ghost_transaction || event.remote_transaction {
             return Ok(());
         }
         let Some(crdt) = event.doc.crdt.as_mut() else {

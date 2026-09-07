@@ -1,6 +1,6 @@
 //! Bridges Helix's [`ChangeSet`]s to [`cola`], a text CRDT.
 //!
-//! cola counts in whatever unit you decide and never checks. Helix indexes
+//! Cola counts in whatever unit you decide and never checks. Helix indexes
 //! chars, so every `usize` crossing this boundary is a char index.
 
 use anyhow::Result;
@@ -15,9 +15,8 @@ pub enum RemoteOperation {
     Delete(cola::Deletion),
 }
 
-/// TODO: derive this from the peer's `EndpointId` so it survives a reconnect.
 pub fn replica_id() -> ReplicaId {
-    // cola panics on a zero id.
+    // Cola panics on a zero id.
     rand::random_range(1..=ReplicaId::MAX)
 }
 
@@ -33,7 +32,7 @@ impl Replica {
     }
 
     /// Forks, so `id` must differ from every other replica in the session:
-    /// cola breaks ties between concurrent insertions by comparing ids, and
+    /// Cola breaks ties between concurrent insertions by comparing ids, and
     /// two replicas sharing one silently diverge.
     pub fn decode(id: ReplicaId, encoded: &[u8]) -> Result<Self> {
         let encoded = EncodedReplica::from_bytes(encoded);
@@ -70,7 +69,7 @@ impl Replica {
         ops
     }
 
-    /// `None` means cola backlogged the op, not that it failed.
+    /// `None` means Cola backlogged the op, not that it failed.
     pub fn from_remote(&mut self, text: &Rope, op: &RemoteOperation) -> Option<Transaction> {
         match op {
             RemoteOperation::Insert { insertion, text: s } => {

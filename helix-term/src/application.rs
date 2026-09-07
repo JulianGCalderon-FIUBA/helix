@@ -1224,22 +1224,27 @@ impl Application {
 
                 match message {
                     Message::Share { text, replica } => {
-                        // Attach the replica *after* the swap, or the hook
-                        // broadcasts it straight back to the sharer.
-                        let transaction = Transaction::change(
-                            doc.text(),
-                            [(0, doc.text().len_chars(), Some(text.as_str().into()))].into_iter(),
-                        );
-                        doc.apply(&transaction, view_id);
-
-                        match Replica::decode(replica_id(), &replica) {
-                            Ok(crdt) => doc.crdt = Some(crdt),
+                        let crdt = match Replica::decode(replica_id(), &replica) {
+                            Ok(crdt) => crdt,
                             Err(err) => {
                                 self.editor.set_error(format!(
                                     "failed to join the shared document: {err:#}"
                                 ));
+                                return;
                             }
-                        }
+                        };
+
+                        // Applied as a remote transaction so the hook does not
+                        // feed the snapshot back into the CRDT and echo it to
+                        // the sharer.
+                        let transaction = Transaction::change(
+                            doc.text(),
+                            [(0, doc.text().len_chars(), Some(text.as_str().into()))].into_iter(),
+                        )
+                        .as_remote();
+                        doc.apply(&transaction, view_id);
+
+                        doc.crdt = Some(crdt);
                     }
 
                     Message::Edit(op) => {

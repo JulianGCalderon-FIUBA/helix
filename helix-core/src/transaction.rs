@@ -574,6 +574,10 @@ impl ChangeSet {
 pub struct Transaction {
     changes: ChangeSet,
     selection: Option<Selection>,
+    /// Set when this transaction carries changes received from a remote peer.
+    /// The collaboration hook checks it to avoid feeding those changes back
+    /// into the CRDT (and echoing them to the sender).
+    remote_transaction: bool,
 }
 
 impl Transaction {
@@ -582,6 +586,7 @@ impl Transaction {
         Self {
             changes: ChangeSet::new(doc.slice(..)),
             selection: None,
+            remote_transaction: false,
         }
     }
 
@@ -593,6 +598,18 @@ impl Transaction {
     /// When set, explicitly updates the selection.
     pub fn selection(&self) -> Option<&Selection> {
         self.selection.as_ref()
+    }
+
+    /// Whether this transaction carries changes received from a remote peer.
+    pub fn is_remote(&self) -> bool {
+        self.remote_transaction
+    }
+
+    /// Mark this transaction as carrying changes received from a remote peer,
+    /// so it is not propagated back to the CRDT.
+    pub fn as_remote(mut self) -> Self {
+        self.remote_transaction = true;
+        self
     }
 
     /// Returns true if applied successfully.
@@ -612,6 +629,7 @@ impl Transaction {
         Self {
             changes,
             selection: None,
+            remote_transaction: false,
         }
     }
 
@@ -879,6 +897,7 @@ impl From<ChangeSet> for Transaction {
         Self {
             changes,
             selection: None,
+            remote_transaction: false,
         }
     }
 }

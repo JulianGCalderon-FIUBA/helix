@@ -1629,6 +1629,7 @@ impl Document {
             old_text: &old_doc,
             changes,
             ghost_transaction: !emit_lsp_notification,
+            remote_transaction: transaction.is_remote(),
         });
 
         // if specified, the current selection should instead be replaced by transaction.selection
