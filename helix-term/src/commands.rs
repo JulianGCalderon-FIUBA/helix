@@ -3316,6 +3316,7 @@ fn buffer_picker(cx: &mut Context) {
         path: Option<Cow<'a, Path>>,
         is_modified: bool,
         is_current: bool,
+        is_shared: bool,
         focused_at: std::time::Instant,
     }
 
@@ -3327,6 +3328,7 @@ fn buffer_picker(cx: &mut Context) {
             .map(helix_stdx::path::get_relative_path),
         is_modified: doc.is_modified(),
         is_current: doc.id() == current,
+        is_shared: doc.shared.is_some(),
         focused_at: doc.focused_at,
     };
 
@@ -3349,6 +3351,9 @@ fn buffer_picker(cx: &mut Context) {
             }
             if meta.is_current {
                 flags.push('*');
+            }
+            if meta.is_shared {
+                flags.push('&');
             }
             flags.into()
         }),
