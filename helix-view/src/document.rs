@@ -34,7 +34,7 @@ use std::sync::{Arc, Weak};
 use std::time::SystemTime;
 
 use helix_core::{
-    crdt::Replica,
+    crdt::{Replica, ShareId},
     editor_config::EditorConfig,
     encoding,
     history::{History, State, UndoKind},
@@ -131,6 +131,12 @@ pub struct SavePoint {
     revert: Mutex<Transaction>,
 }
 
+/// A document's membership in a collaborative session.
+pub struct Shared {
+    pub id: ShareId,
+    pub replica: Replica,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DocumentOpenError {
     #[error("path must be a regular file, symlink, or directory")]
@@ -193,7 +199,7 @@ pub struct Document {
     // be more troublesome.
     pub history: Cell<History>,
     /// Present only while the document is shared with a session.
-    pub crdt: Option<Replica>,
+    pub shared: Option<Shared>,
     pub config: Arc<dyn DynAccess<Config>>,
 
     savepoints: Vec<Weak<SavePoint>>,
@@ -757,7 +763,7 @@ impl Document {
             diagnostics: Vec::new(),
             version: 0,
             history: Cell::new(History::default()),
-            crdt: None,
+            shared: None,
             savepoints: Vec::new(),
             last_saved_time: SystemTime::now(),
             last_saved_revision: 0,
@@ -2063,6 +2069,11 @@ impl Document {
     /// File path on disk.
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
+    }
+
+    /// The session wide id of this document, if it is shared.
+    pub fn share_id(&self) -> Option<ShareId> {
+        self.shared.as_ref().map(|shared| shared.id)
     }
 
     /// File path as a URL.

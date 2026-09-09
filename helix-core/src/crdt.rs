@@ -9,6 +9,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::{transaction::Operation, ChangeSet, Rope, Transaction};
 
+/// Addresses a document across the peers of a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ShareId(u64);
+
+impl ShareId {
+    pub fn random() -> Self {
+        Self(rand::random())
+    }
+
+    pub fn fmt_short(&self) -> String {
+        format!("{:08x}", self.0 as u32)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RemoteOperation {
     Insert { insertion: Insertion, text: String },
