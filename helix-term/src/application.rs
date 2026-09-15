@@ -3,7 +3,7 @@ use futures_util::Stream;
 use helix_core::{
     crdt::{replica_id, Replica},
     diagnostic::Severity,
-    pos_at_coords, syntax, Range, Rope, Selection,
+    pos_at_coords, syntax, Range, Selection,
 };
 use helix_lsp::{
     lsp::{self, notification::Notification},
@@ -1237,16 +1237,10 @@ impl Application {
                         }
                     };
 
-                    let mut doc = Document::from(
-                        Rope::from(text.as_str()),
-                        None,
-                        self.editor.config.clone(),
-                        self.editor.syn_loader.clone(),
-                    );
-                    doc.shared = Some(replica);
-
                     // `Load` registers the buffer without stealing focus.
-                    self.editor.new_file_from_document(Action::Load, doc);
+                    let doc_id = self.editor.new_file_from_string(Action::Load, &text);
+                    doc_mut!(self.editor, &doc_id).shared = Some(replica);
+
                     self.editor.set_status(format!(
                         "{} shared a buffer ({})",
                         from.fmt_short(),
