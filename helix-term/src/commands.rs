@@ -409,7 +409,7 @@ impl MappableCommand {
         file_explorer_in_current_directory, "Open file explorer at current working directory",
         code_action, "Perform code action",
         buffer_picker, "Open buffer picker",
-        push_session_file_picker, "Open session file picker",
+        session_file_picker, "Open session file picker",
         jumplist_picker, "Open jumplist picker",
         symbol_picker, "Open symbol picker",
         syntax_symbol_picker, "Open symbol picker from syntax information",
@@ -3439,13 +3439,17 @@ struct SessionFileMeta {
     shared_id: SharedId,
 }
 
-fn push_session_file_picker(cx: &mut Context) {
-    let picker = session_file_picker(cx.editor);
-    cx.push_layer(Box::new(overlaid(picker)));
+fn session_file_picker(cx: &mut Context) {
+    cx.callback.push(Box::new(
+        |compositor: &mut Compositor, cx: &mut compositor::Context| {
+            push_session_file_picker(cx.editor, compositor)
+        },
+    ));
 }
 
-/// Lists every buffer shared in the collaborative session, local or remote.
-fn session_file_picker(editor: &Editor) -> Picker<SessionFileMeta, PathStyleConfig> {
+/// Opens a picker of every buffer shared in the collaborative session, local
+/// or remote.
+fn push_session_file_picker(editor: &Editor, compositor: &mut Compositor) {
     let items = editor
         .documents()
         .filter_map(|doc| {
@@ -3474,7 +3478,7 @@ fn session_file_picker(editor: &Editor) -> Picker<SessionFileMeta, PathStyleConf
         }),
     ];
 
-    Picker::new(
+    let picker = Picker::new(
         columns,
         1,
         items,
@@ -3490,7 +3494,8 @@ fn session_file_picker(editor: &Editor) -> Picker<SessionFileMeta, PathStyleConf
             (cursor_line, cursor_line)
         });
         Some((meta.id.into(), lines))
-    })
+    });
+    compositor.push(Box::new(overlaid(picker)));
 }
 
 fn jumplist_picker(cx: &mut Context) {

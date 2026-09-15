@@ -3104,8 +3104,7 @@ fn session_files(
     cx.jobs.callback(async move {
         let call: job::Callback = Callback::EditorCompositor(Box::new(
             |editor: &mut Editor, compositor: &mut Compositor| {
-                let picker = session_file_picker(editor);
-                compositor.push(Box::new(overlaid(picker)));
+                push_session_file_picker(editor, compositor)
             },
         ));
         Ok(call)
