@@ -7,12 +7,12 @@ use crate::job::Job;
 use super::*;
 
 use helix_core::command_line::{Args, Flag, Signature, Token, TokenKind};
-use helix_core::crdt::{replica_id, Replica, SharedId};
+use helix_core::crdt::{replica_id, Replica};
 use helix_core::fuzzy::fuzzy_match;
 use helix_core::indent::MAX_INDENT;
 use helix_core::line_ending;
 use helix_stdx::path::home_dir;
-use helix_view::document::{read_to_string, Shared, DEFAULT_LANGUAGE_NAME};
+use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
 use helix_view::editor::{CloseError, ConfigEvent};
 use helix_view::p2p::proto::Message;
 use helix_view::{expansion, p2p};
@@ -3029,15 +3029,13 @@ fn session_share(
     let doc = doc_mut!(cx.editor);
     ensure!(doc.shared.is_none(), "buffer is already shared");
 
-    // A replica can only be forked from one origin state.
-    let id = SharedId::random();
     let replica = Replica::new(replica_id(), doc.text());
     let message = Message::Share {
-        id,
+        id: replica.id(),
         text: doc.text().to_string(),
         replica: replica.encode(),
     };
-    doc.shared = Some(Shared { id, replica });
+    doc.shared = Some(replica);
 
     cx.editor
         .p2p_service

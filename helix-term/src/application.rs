@@ -13,7 +13,7 @@ use helix_lsp::{
 use helix_stdx::path::get_relative_path;
 use helix_view::{
     align_view,
-    document::{Document, DocumentOpenError, DocumentSavedEventResult, Shared},
+    document::{Document, DocumentOpenError, DocumentSavedEventResult},
     editor::{Action, ConfigEvent, EditorEvent},
     graphics::Rect,
     p2p::{self, proto::Message},
@@ -1228,7 +1228,7 @@ impl Application {
                         return;
                     }
 
-                    let replica = match Replica::decode(replica_id(), &replica) {
+                    let replica = match Replica::decode(id, replica_id(), &replica) {
                         Ok(replica) => replica,
                         Err(err) => {
                             self.editor
@@ -1243,7 +1243,7 @@ impl Application {
                         self.editor.config.clone(),
                         self.editor.syn_loader.clone(),
                     );
-                    doc.shared = Some(Shared { id, replica });
+                    doc.shared = Some(replica);
 
                     // `Load` registers the buffer without stealing focus.
                     self.editor.new_file_from_document(Action::Load, doc);
@@ -1280,13 +1280,13 @@ impl Application {
                     // The buffer need not be displayed in the view we fell back to.
                     doc.ensure_view_init(view_id);
 
-                    let Some(mut shared) = doc.shared.take() else {
+                    let Some(mut replica) = doc.shared.take() else {
                         return;
                     };
-                    if let Some(transaction) = shared.replica.from_remote(doc.text(), &op) {
+                    if let Some(transaction) = replica.from_remote(doc.text(), &op) {
                         doc.apply(&transaction, view_id);
                     }
-                    doc.shared = Some(shared);
+                    doc.shared = Some(replica);
                 }
 
                 Message::Hello { .. } | Message::Welcome { .. } => {}

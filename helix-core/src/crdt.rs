@@ -35,22 +35,31 @@ pub fn replica_id() -> ReplicaId {
 }
 
 pub struct Replica {
+    /// Addresses the shared document this replica belongs to.
+    id: SharedId,
     replica: cola::Replica,
 }
 
 impl Replica {
-    pub fn new(id: ReplicaId, text: &Rope) -> Self {
+    /// Mints the id the other peers will know this document by.
+    pub fn new(replica_id: ReplicaId, text: &Rope) -> Self {
         Self {
-            replica: cola::Replica::new(id, text.len_chars()),
+            id: SharedId::random(),
+            replica: cola::Replica::new(replica_id, text.len_chars()),
         }
     }
 
-    /// Forks, so the id must differ from every other replica in the session.
-    pub fn decode(id: ReplicaId, encoded: &[u8]) -> Result<Self> {
+    /// Forks, so `replica_id` must differ from every other replica in the session.
+    pub fn decode(id: SharedId, replica_id: ReplicaId, encoded: &[u8]) -> Result<Self> {
         let encoded = EncodedReplica::from_bytes(encoded);
         Ok(Self {
-            replica: cola::Replica::decode(id, &encoded)?,
+            id,
+            replica: cola::Replica::decode(replica_id, &encoded)?,
         })
+    }
+
+    pub fn id(&self) -> SharedId {
+        self.id
     }
 
     pub fn encode(&self) -> Vec<u8> {

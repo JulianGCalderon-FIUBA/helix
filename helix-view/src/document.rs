@@ -131,12 +131,6 @@ pub struct SavePoint {
     revert: Mutex<Transaction>,
 }
 
-/// A document's membership in a collaborative session.
-pub struct Shared {
-    pub id: SharedId,
-    pub replica: Replica,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum DocumentOpenError {
     #[error("path must be a regular file, symlink, or directory")]
@@ -199,7 +193,7 @@ pub struct Document {
     // be more troublesome.
     pub history: Cell<History>,
     /// Present only while the document is shared with a session.
-    pub shared: Option<Shared>,
+    pub shared: Option<Replica>,
     pub config: Arc<dyn DynAccess<Config>>,
 
     savepoints: Vec<Weak<SavePoint>>,
@@ -2073,7 +2067,7 @@ impl Document {
 
     /// The session wide id of this document, if it is shared.
     pub fn shared_id(&self) -> Option<SharedId> {
-        self.shared.as_ref().map(|shared| shared.id)
+        self.shared.as_ref().map(Replica::id)
     }
 
     /// File path as a URL.
