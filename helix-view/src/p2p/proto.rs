@@ -1,5 +1,5 @@
 use anyhow::{ensure, Result};
-use helix_core::crdt::{RemoteOperation, ShareId};
+use helix_core::crdt::{RemoteOperation, SharedId};
 use iroh::{
     endpoint::{ReadExactError, RecvStream, SendStream},
     EndpointAddr,
@@ -17,12 +17,12 @@ pub enum Message {
         peers: Vec<EndpointAddr>,
     },
     Share {
-        id: ShareId,
+        id: SharedId,
         text: String,
         replica: Vec<u8>,
     },
     Edit {
-        id: ShareId,
+        id: SharedId,
         op: RemoteOperation,
     },
 }

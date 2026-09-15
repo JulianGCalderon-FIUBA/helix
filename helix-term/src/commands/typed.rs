@@ -7,7 +7,7 @@ use crate::job::Job;
 use super::*;
 
 use helix_core::command_line::{Args, Flag, Signature, Token, TokenKind};
-use helix_core::crdt::{replica_id, Replica, ShareId};
+use helix_core::crdt::{replica_id, Replica, SharedId};
 use helix_core::fuzzy::fuzzy_match;
 use helix_core::indent::MAX_INDENT;
 use helix_core::line_ending;
@@ -3030,7 +3030,7 @@ fn session_share(
     ensure!(doc.shared.is_none(), "buffer is already shared");
 
     // A replica can only be forked from one origin state.
-    let id = ShareId::random();
+    let id = SharedId::random();
     let replica = Replica::new(replica_id(), doc.text());
     let message = Message::Share {
         id,

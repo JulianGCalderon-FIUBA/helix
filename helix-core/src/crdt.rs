@@ -11,9 +11,9 @@ use crate::{transaction::Operation, ChangeSet, Rope, Transaction};
 
 /// Addresses a document across the peers of a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ShareId(u64);
+pub struct SharedId(u64);
 
-impl ShareId {
+impl SharedId {
     pub fn random() -> Self {
         Self(rand::random())
     }

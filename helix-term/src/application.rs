@@ -1223,7 +1223,7 @@ impl Application {
                     if self
                         .editor
                         .documents()
-                        .any(|doc| doc.share_id() == Some(id))
+                        .any(|doc| doc.shared_id() == Some(id))
                     {
                         return;
                     }
@@ -1263,7 +1263,7 @@ impl Application {
                             self.editor
                                 .documents
                                 .get(&view.doc)
-                                .and_then(Document::share_id)
+                                .and_then(Document::shared_id)
                                 == Some(id)
                         })
                         .map_or(self.editor.tree.focus, |(view_id, _)| view_id);
@@ -1272,7 +1272,7 @@ impl Application {
                         .editor
                         .documents
                         .values_mut()
-                        .find(|doc| doc.share_id() == Some(id))
+                        .find(|doc| doc.shared_id() == Some(id))
                     else {
                         return;
                     };

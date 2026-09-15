@@ -34,7 +34,7 @@ use std::sync::{Arc, Weak};
 use std::time::SystemTime;
 
 use helix_core::{
-    crdt::{Replica, ShareId},
+    crdt::{Replica, SharedId},
     editor_config::EditorConfig,
     encoding,
     history::{History, State, UndoKind},
@@ -133,7 +133,7 @@ pub struct SavePoint {
 
 /// A document's membership in a collaborative session.
 pub struct Shared {
-    pub id: ShareId,
+    pub id: SharedId,
     pub replica: Replica,
 }
 
@@ -2072,7 +2072,7 @@ impl Document {
     }
 
     /// The session wide id of this document, if it is shared.
-    pub fn share_id(&self) -> Option<ShareId> {
+    pub fn shared_id(&self) -> Option<SharedId> {
         self.shared.as_ref().map(|shared| shared.id)
     }
 
