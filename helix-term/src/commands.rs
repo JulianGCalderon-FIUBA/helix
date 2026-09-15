@@ -3322,10 +3322,16 @@ fn buffer_picker(cx: &mut Context) {
 
     let new_meta = |doc: &Document| BufferMeta {
         id: doc.id(),
+        // A replica that was never written has no path of its own, so fall
+        // back to the path it has on its owner.
         path: doc
             .path()
             .map(ToOwned::to_owned)
-            .map(helix_stdx::path::get_relative_path),
+            .map(helix_stdx::path::get_relative_path)
+            .or_else(|| {
+                let path = doc.crdt.as_ref()?.path()?;
+                Some(Cow::Owned(path.to_path_buf()))
+            }),
         is_modified: doc.is_modified(),
         is_current: doc.id() == current,
         is_shared: doc.crdt.is_some(),
