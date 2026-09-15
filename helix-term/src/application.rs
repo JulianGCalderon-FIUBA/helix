@@ -1228,8 +1228,8 @@ impl Application {
                         return;
                     }
 
-                    let replica = match Replica::decode(id, replica_id(), &replica) {
-                        Ok(replica) => replica,
+                    let crdt = match Replica::decode(id, replica_id(), &replica) {
+                        Ok(crdt) => crdt,
                         Err(err) => {
                             self.editor
                                 .set_error(format!("failed to join shared buffer: {err:#}"));
@@ -1237,9 +1237,8 @@ impl Application {
                         }
                     };
 
-                    // `Load` registers the buffer without stealing focus.
                     let doc_id = self.editor.new_file_from_string(Action::Load, &text);
-                    doc_mut!(self.editor, &doc_id).shared = Some(replica);
+                    doc_mut!(self.editor, &doc_id).crdt = Some(crdt);
 
                     self.editor.set_status(format!(
                         "{} shared a buffer ({})",
@@ -1271,17 +1270,17 @@ impl Application {
                         return;
                     };
 
-                    // `apply` reads the document's selection for `view_id`, which a
+                    // apply reads the document's selection for view_id, which a
                     // buffer that view has never displayed does not have yet.
                     doc.ensure_view_init(view_id);
 
-                    let Some(mut replica) = doc.shared.take() else {
+                    let Some(mut crdt) = doc.crdt.take() else {
                         return;
                     };
-                    if let Some(transaction) = replica.from_remote(doc.text(), &op) {
+                    if let Some(transaction) = crdt.from_remote(doc.text(), &op) {
                         doc.apply(&transaction, view_id);
                     }
-                    doc.shared = Some(replica);
+                    doc.crdt = Some(crdt);
                 }
 
                 Message::Hello { .. } | Message::Welcome { .. } => {}

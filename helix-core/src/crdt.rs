@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{transaction::Operation, ChangeSet, Rope, Transaction};
 
-/// Addresses a document across the peers of a session.
+/// Identifies a single document across all peers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SharedId(u64);
 
@@ -35,31 +35,28 @@ pub fn replica_id() -> ReplicaId {
 }
 
 pub struct Replica {
-    /// Addresses the shared document this replica belongs to.
-    id: SharedId,
+    shared_id: SharedId,
     replica: cola::Replica,
 }
 
 impl Replica {
-    /// Mints the id the other peers will know this document by.
     pub fn new(replica_id: ReplicaId, text: &Rope) -> Self {
         Self {
-            id: SharedId::random(),
+            shared_id: SharedId::random(),
             replica: cola::Replica::new(replica_id, text.len_chars()),
         }
     }
 
-    /// Forks, so `replica_id` must differ from every other replica in the session.
-    pub fn decode(id: SharedId, replica_id: ReplicaId, encoded: &[u8]) -> Result<Self> {
-        let encoded = EncodedReplica::from_bytes(encoded);
-        Ok(Self {
-            id,
-            replica: cola::Replica::decode(replica_id, &encoded)?,
-        })
+    pub fn shared_id(&self) -> SharedId {
+        self.shared_id
     }
 
-    pub fn id(&self) -> SharedId {
-        self.id
+    pub fn decode(shared_id: SharedId, replica_id: ReplicaId, encoded: &[u8]) -> Result<Self> {
+        let encoded = EncodedReplica::from_bytes(encoded);
+        Ok(Self {
+            shared_id,
+            replica: cola::Replica::decode(replica_id, &encoded)?,
+        })
     }
 
     pub fn encode(&self) -> Vec<u8> {

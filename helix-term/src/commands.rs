@@ -3328,7 +3328,7 @@ fn buffer_picker(cx: &mut Context) {
             .map(helix_stdx::path::get_relative_path),
         is_modified: doc.is_modified(),
         is_current: doc.id() == current,
-        is_shared: doc.shared.is_some(),
+        is_shared: doc.crdt.is_some(),
         focused_at: doc.focused_at,
     };
 

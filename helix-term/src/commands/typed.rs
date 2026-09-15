@@ -3027,15 +3027,15 @@ fn session_share(
     }
 
     let doc = doc_mut!(cx.editor);
-    ensure!(doc.shared.is_none(), "buffer is already shared");
+    ensure!(doc.crdt.is_none(), "buffer is already shared");
 
     let replica = Replica::new(replica_id(), doc.text());
     let message = Message::Share {
-        id: replica.id(),
+        id: replica.shared_id(),
         text: doc.text().to_string(),
         replica: replica.encode(),
     };
-    doc.shared = Some(replica);
+    doc.crdt = Some(replica);
 
     cx.editor
         .p2p_service
@@ -3094,7 +3094,7 @@ fn session_close(
 
     // Leaving drops every peer, so nothing is shared any more.
     for doc in cx.editor.documents_mut() {
-        doc.shared = None;
+        doc.crdt = None;
     }
 
     cx.editor
