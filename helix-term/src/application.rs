@@ -1271,7 +1271,8 @@ impl Application {
                         return;
                     };
 
-                    // The buffer need not be displayed in the view we fell back to.
+                    // `apply` reads the document's selection for `view_id`, which a
+                    // buffer that view has never displayed does not have yet.
                     doc.ensure_view_init(view_id);
 
                     let Some(mut replica) = doc.shared.take() else {
