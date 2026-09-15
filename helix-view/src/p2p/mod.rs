@@ -319,7 +319,9 @@ impl Node {
 
     fn handle(&self, from: EndpointId, message: Message) {
         match message {
-            Message::Share { .. } | Message::Edit(_) => self.emit(Event::Message { from, message }),
+            Message::Share { .. } | Message::Edit { .. } => {
+                self.emit(Event::Message { from, message })
+            }
             Message::Hello { .. } | Message::Welcome { .. } => self.report(format!(
                 "unexpected handshake message from {}",
                 from.fmt_short()

@@ -10,12 +10,13 @@ pub fn register_hooks(requests: UnboundedSender<p2p::Request>) {
         if event.ghost_transaction || event.remote_transaction {
             return Ok(());
         }
-        let Some(crdt) = event.doc.crdt.as_mut() else {
+        let Some(replica) = event.doc.crdt.as_mut() else {
             return Ok(());
         };
 
-        for op in crdt.from_local(event.changes) {
-            let _ = requests.send(p2p::Request::Broadcast(Message::Edit(op)));
+        let id = replica.shared_id();
+        for op in replica.from_local(event.changes) {
+            let _ = requests.send(p2p::Request::Broadcast(Message::Edit { id, op }));
         }
 
         Ok(())

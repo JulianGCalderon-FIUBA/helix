@@ -34,7 +34,7 @@ use std::sync::{Arc, Weak};
 use std::time::SystemTime;
 
 use helix_core::{
-    crdt::Replica,
+    crdt::{Replica, SharedId},
     editor_config::EditorConfig,
     encoding,
     history::{History, State, UndoKind},
@@ -2063,6 +2063,11 @@ impl Document {
     /// File path on disk.
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
+    }
+
+    /// The session wide id of this document, if it is shared.
+    pub fn shared_id(&self) -> Option<SharedId> {
+        self.crdt.as_ref().map(Replica::shared_id)
     }
 
     /// File path as a URL.

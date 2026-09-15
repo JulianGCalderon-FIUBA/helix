@@ -3,7 +3,7 @@ use futures_util::Stream;
 use helix_core::{
     crdt::{replica_id, Replica},
     diagnostic::Severity,
-    pos_at_coords, syntax, Range, Selection, Transaction,
+    pos_at_coords, syntax, Range, Selection,
 };
 use helix_lsp::{
     lsp::{self, notification::Notification},
@@ -13,8 +13,8 @@ use helix_lsp::{
 use helix_stdx::path::get_relative_path;
 use helix_view::{
     align_view,
-    document::{DocumentOpenError, DocumentSavedEventResult},
-    editor::{ConfigEvent, EditorEvent},
+    document::{Document, DocumentOpenError, DocumentSavedEventResult},
+    editor::{Action, ConfigEvent, EditorEvent},
     graphics::Rect,
     p2p::{self, proto::Message},
     theme,
@@ -1218,43 +1218,73 @@ impl Application {
                 self.editor
                     .set_status(format!("disconnected with {}", peer.fmt_short()));
             }
-            p2p::Event::Message { message, .. } => {
-                let view_id = self.editor.tree.focus;
-                let doc = doc_mut!(self.editor);
+            p2p::Event::Message { from, message } => match message {
+                Message::Share { id, text, replica } => {
+                    if self
+                        .editor
+                        .documents()
+                        .any(|doc| doc.shared_id() == Some(id))
+                    {
+                        return;
+                    }
 
-                match message {
-                    Message::Share { text, replica } => {
-                        let crdt = match Replica::decode(replica_id(), &replica) {
-                            Ok(crdt) => crdt,
-                            Err(err) => {
-                                self.editor
-                                    .set_error(format!("failed to join shared session: {err:#}"));
-                                return;
-                            }
-                        };
-                        doc.crdt = Some(crdt);
+                    let crdt = match Replica::decode(id, replica_id(), &replica) {
+                        Ok(crdt) => crdt,
+                        Err(err) => {
+                            self.editor
+                                .set_error(format!("failed to join shared buffer: {err:#}"));
+                            return;
+                        }
+                    };
 
-                        let transaction = Transaction::change(
-                            doc.text(),
-                            [(0, doc.text().len_chars(), Some(text.as_str().into()))].into_iter(),
-                        )
-                        .as_remote();
+                    let doc_id = self.editor.new_file_from_string(Action::Load, &text);
+                    doc_mut!(self.editor, &doc_id).crdt = Some(crdt);
+
+                    self.editor.set_status(format!(
+                        "{} shared a buffer ({})",
+                        from.fmt_short(),
+                        id.fmt_short()
+                    ));
+                }
+
+                Message::Edit { id, op } => {
+                    let view_id = self
+                        .editor
+                        .tree
+                        .traverse()
+                        .find(|(_, view)| {
+                            self.editor
+                                .documents
+                                .get(&view.doc)
+                                .and_then(Document::shared_id)
+                                == Some(id)
+                        })
+                        .map_or(self.editor.tree.focus, |(view_id, _)| view_id);
+
+                    let Some(doc) = self
+                        .editor
+                        .documents
+                        .values_mut()
+                        .find(|doc| doc.shared_id() == Some(id))
+                    else {
+                        return;
+                    };
+
+                    // apply reads the document's selection for view_id, which a
+                    // buffer that view has never displayed does not have yet.
+                    doc.ensure_view_init(view_id);
+
+                    let Some(mut crdt) = doc.crdt.take() else {
+                        return;
+                    };
+                    if let Some(transaction) = crdt.from_remote(doc.text(), &op) {
                         doc.apply(&transaction, view_id);
                     }
-
-                    Message::Edit(op) => {
-                        let Some(mut crdt) = doc.crdt.take() else {
-                            return;
-                        };
-                        if let Some(transaction) = crdt.from_remote(doc.text(), &op) {
-                            doc.apply(&transaction, view_id);
-                        }
-                        doc.crdt = Some(crdt)
-                    }
-
-                    Message::Hello { .. } | Message::Welcome { .. } => {}
+                    doc.crdt = Some(crdt);
                 }
-            }
+
+                Message::Hello { .. } | Message::Welcome { .. } => {}
+            },
             p2p::Event::Error(err) => {
                 self.editor.set_error(err);
             }

@@ -2080,6 +2080,17 @@ impl Editor {
         )
     }
 
+    /// Opens `text` as a scratch buffer.
+    pub fn new_file_from_string(&mut self, action: Action, text: &str) -> DocumentId {
+        let doc = Document::from(
+            helix_core::Rope::from(text),
+            None,
+            self.config.clone(),
+            self.syn_loader.clone(),
+        );
+        self.new_file_from_document(action, doc)
+    }
+
     pub fn new_file_from_stdin(&mut self, action: Action) -> Result<DocumentId, Error> {
         let (stdin, encoding, has_bom) = crate::document::read_to_string(&mut stdin(), None)?;
         let doc = Document::from(

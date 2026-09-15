@@ -9,6 +9,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::{transaction::Operation, ChangeSet, Rope, Transaction};
 
+/// Identifies a single document across all peers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SharedId(u64);
+
+impl SharedId {
+    pub fn random() -> Self {
+        Self(rand::random())
+    }
+
+    pub fn fmt_short(&self) -> String {
+        format!("{:08x}", self.0 as u32)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RemoteOperation {
     Insert { insertion: Insertion, text: String },
@@ -21,21 +35,27 @@ pub fn replica_id() -> ReplicaId {
 }
 
 pub struct Replica {
+    shared_id: SharedId,
     replica: cola::Replica,
 }
 
 impl Replica {
-    pub fn new(id: ReplicaId, text: &Rope) -> Self {
+    pub fn new(replica_id: ReplicaId, text: &Rope) -> Self {
         Self {
-            replica: cola::Replica::new(id, text.len_chars()),
+            shared_id: SharedId::random(),
+            replica: cola::Replica::new(replica_id, text.len_chars()),
         }
     }
 
-    /// Forks, so the id must differ from every other replica in the session.
-    pub fn decode(id: ReplicaId, encoded: &[u8]) -> Result<Self> {
+    pub fn shared_id(&self) -> SharedId {
+        self.shared_id
+    }
+
+    pub fn decode(shared_id: SharedId, replica_id: ReplicaId, encoded: &[u8]) -> Result<Self> {
         let encoded = EncodedReplica::from_bytes(encoded);
         Ok(Self {
-            replica: cola::Replica::decode(id, &encoded)?,
+            shared_id,
+            replica: cola::Replica::decode(replica_id, &encoded)?,
         })
     }
 
