@@ -2193,6 +2193,7 @@ dependencies = [
  "helix-stdx",
  "imara-diff",
  "indoc",
+ "iroh-base",
  "log",
  "nucleo",
  "once_cell",

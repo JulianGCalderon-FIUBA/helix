@@ -1219,7 +1219,12 @@ impl Application {
                     .set_status(format!("disconnected with {}", peer.fmt_short()));
             }
             p2p::Event::Message { from, message } => match message {
-                Message::Share { id, text, replica } => {
+                Message::Share {
+                    id,
+                    path,
+                    text,
+                    replica,
+                } => {
                     if self
                         .editor
                         .documents()
@@ -1228,7 +1233,14 @@ impl Application {
                         return;
                     }
 
-                    let crdt = match Replica::decode(id, replica_id(), &replica) {
+                    let status = match &path {
+                        Some(path) => format!("{} shared {}", from.fmt_short(), path.display()),
+                        None => {
+                            format!("{} shared a buffer ({})", from.fmt_short(), id.fmt_short())
+                        }
+                    };
+
+                    let crdt = match Replica::decode(id, from, path, replica_id(), &replica) {
                         Ok(crdt) => crdt,
                         Err(err) => {
                             self.editor
@@ -1240,11 +1252,7 @@ impl Application {
                     let doc_id = self.editor.new_file_from_string(Action::Load, &text);
                     doc_mut!(self.editor, &doc_id).crdt = Some(crdt);
 
-                    self.editor.set_status(format!(
-                        "{} shared a buffer ({})",
-                        from.fmt_short(),
-                        id.fmt_short()
-                    ));
+                    self.editor.set_status(status);
                 }
 
                 Message::Edit { id, op } => {

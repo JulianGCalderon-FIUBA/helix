@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::{ensure, Result};
 use helix_core::crdt::{RemoteOperation, SharedId};
 use iroh::{
@@ -18,6 +20,7 @@ pub enum Message {
     },
     Share {
         id: SharedId,
+        path: Option<PathBuf>,
         text: String,
         replica: Vec<u8>,
     },

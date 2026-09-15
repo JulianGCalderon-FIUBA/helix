@@ -3026,12 +3026,26 @@ fn session_share(
         return Ok(());
     }
 
+    let owner = cx.editor.p2p_service.id;
     let doc = doc_mut!(cx.editor);
     ensure!(doc.crdt.is_none(), "buffer is already shared");
 
-    let replica = Replica::new(replica_id(), doc.text());
+    // Peers only see the path relative to the workspace, so a file outside
+    // of it is shared by name alone.
+    let path = doc.path().map(|path| {
+        let (workspace, _) = helix_loader::find_workspace();
+        match path.strip_prefix(&workspace) {
+            Ok(relative) => relative.to_path_buf(),
+            Err(_) => path
+                .file_name()
+                .map_or_else(|| path.to_path_buf(), Into::into),
+        }
+    });
+
+    let replica = Replica::new(replica_id(), owner, path, doc.text());
     let message = Message::Share {
         id: replica.shared_id(),
+        path: replica.path().map(ToOwned::to_owned),
         text: doc.text().to_string(),
         replica: replica.encode(),
     };
