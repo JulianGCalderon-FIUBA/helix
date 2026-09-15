@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use cola::{EncodedReplica, Insertion, ReplicaId};
-use iroh_base::EndpointId;
+pub use iroh_base::EndpointId;
 use serde::{Deserialize, Serialize};
 
 use crate::{transaction::Operation, ChangeSet, Rope, Transaction};

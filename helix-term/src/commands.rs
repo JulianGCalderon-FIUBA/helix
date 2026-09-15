@@ -24,6 +24,7 @@ use helix_core::{
     chars::char_is_word,
     command_line::{self, Args},
     comment,
+    crdt::EndpointId,
     doc_formatter::TextFormat,
     encoding, find_workspace,
     graphemes::{self, next_grapheme_boundary},
@@ -3283,6 +3284,20 @@ impl PathStyleConfig {
     }
 
     fn stylize<'a>(&self, path: Option<&'a Path>, line: Option<usize>) -> Cell<'a> {
+        Cell::from(Spans::from(self.spans(path, line)))
+    }
+
+    /// Styles a path in another peer's workspace as `owner:path`, like scp.
+    fn stylize_remote<'a>(&self, owner: EndpointId, path: Option<&'a Path>) -> Cell<'a> {
+        let mut spans = vec![
+            Span::styled(owner.fmt_short().to_string(), self.directory_style),
+            Span::styled(":", self.colon_style),
+        ];
+        spans.extend(self.spans(path, None));
+        Cell::from(Spans::from(spans))
+    }
+
+    fn spans<'a>(&self, path: Option<&'a Path>, line: Option<usize>) -> Vec<Span<'a>> {
         let mut spans = Vec::new();
         if let Some(path) = path {
             let directories = path
@@ -3305,38 +3320,48 @@ impl PathStyleConfig {
             ]);
         }
 
-        Cell::from(Spans::from(spans))
+        spans
     }
 }
 
 fn buffer_picker(cx: &mut Context) {
     let current = view!(cx.editor).doc;
+    let local = cx.editor.p2p_service.id;
 
     struct BufferMeta<'a> {
         id: DocumentId,
         path: Option<Cow<'a, Path>>,
+        /// Set when `path` is in another peer's workspace.
+        owner: Option<EndpointId>,
         is_modified: bool,
         is_current: bool,
         is_shared: bool,
         focused_at: std::time::Instant,
     }
 
-    let new_meta = |doc: &Document| BufferMeta {
-        id: doc.id(),
-        // A replica that was never written has no path of its own, so fall
-        // back to the path it has on its owner.
-        path: doc
-            .path()
-            .map(ToOwned::to_owned)
-            .map(helix_stdx::path::get_relative_path)
-            .or_else(|| {
-                let path = doc.crdt.as_ref()?.path()?;
-                Some(Cow::Owned(path.to_path_buf()))
-            }),
-        is_modified: doc.is_modified(),
-        is_current: doc.id() == current,
-        is_shared: doc.crdt.is_some(),
-        focused_at: doc.focused_at,
+    let new_meta = |doc: &Document| {
+        // A replica that was never written has no path of its own, so it
+        // shows the path it has on its owner.
+        let remote = doc
+            .crdt
+            .as_ref()
+            .filter(|replica| doc.path().is_none() && replica.owner() != local);
+
+        BufferMeta {
+            id: doc.id(),
+            path: match remote {
+                Some(replica) => replica.path().map(|path| Cow::Owned(path.to_path_buf())),
+                None => doc
+                    .path()
+                    .map(ToOwned::to_owned)
+                    .map(helix_stdx::path::get_relative_path),
+            },
+            owner: remote.map(|replica| replica.owner()),
+            is_modified: doc.is_modified(),
+            is_current: doc.id() == current,
+            is_shared: doc.crdt.is_some(),
+            focused_at: doc.focused_at,
+        }
     };
 
     let mut items = cx
@@ -3364,9 +3389,13 @@ fn buffer_picker(cx: &mut Context) {
             }
             flags.into()
         }),
-        PickerColumn::new("path", |meta: &BufferMeta, config: &PathStyleConfig| {
-            config.stylize(meta.path.as_deref(), None)
-        }),
+        PickerColumn::new(
+            "path",
+            |meta: &BufferMeta, config: &PathStyleConfig| match meta.owner {
+                Some(owner) => config.stylize_remote(owner, meta.path.as_deref()),
+                None => config.stylize(meta.path.as_deref(), None),
+            },
+        ),
     ];
 
     let initial_cursor = if cx
