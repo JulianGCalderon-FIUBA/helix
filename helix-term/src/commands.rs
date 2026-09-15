@@ -24,7 +24,7 @@ use helix_core::{
     chars::char_is_word,
     command_line::{self, Args},
     comment,
-    crdt::EndpointId,
+    crdt::{EndpointId, SharedId},
     doc_formatter::TextFormat,
     encoding, find_workspace,
     graphemes::{self, next_grapheme_boundary},
@@ -3434,9 +3434,9 @@ fn buffer_picker(cx: &mut Context) {
 
 struct SessionFileMeta {
     id: DocumentId,
-    owner: String,
+    owner: EndpointId,
     path: Option<PathBuf>,
-    shared_id: String,
+    shared_id: SharedId,
 }
 
 fn push_session_file_picker(cx: &mut Context) {
@@ -3446,29 +3446,22 @@ fn push_session_file_picker(cx: &mut Context) {
 
 /// Lists every buffer shared in the collaborative session, local or remote.
 fn session_file_picker(editor: &Editor) -> Picker<SessionFileMeta, PathStyleConfig> {
-    let local = editor.p2p_service.id;
-
     let items = editor
         .documents()
         .filter_map(|doc| {
             let replica = doc.crdt.as_ref()?;
-            let owner = replica.owner();
             Some(SessionFileMeta {
                 id: doc.id(),
-                owner: if owner == local {
-                    "you".to_string()
-                } else {
-                    owner.fmt_short().to_string()
-                },
+                owner: replica.owner(),
                 path: replica.path().map(ToOwned::to_owned),
-                shared_id: replica.shared_id().fmt_short(),
+                shared_id: replica.shared_id(),
             })
         })
         .collect::<Vec<_>>();
 
     let columns = [
         PickerColumn::new("owner", |meta: &SessionFileMeta, _| {
-            meta.owner.as_str().into()
+            meta.owner.fmt_short().to_string().into()
         }),
         PickerColumn::new(
             "path",
@@ -3477,7 +3470,7 @@ fn session_file_picker(editor: &Editor) -> Picker<SessionFileMeta, PathStyleConf
             },
         ),
         PickerColumn::new("id", |meta: &SessionFileMeta, _| {
-            meta.shared_id.as_str().into()
+            meta.shared_id.fmt_short().into()
         }),
     ];
 
