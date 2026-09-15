@@ -3097,6 +3097,27 @@ fn session_peers(
     Ok(())
 }
 
+fn session_files(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    cx.jobs.callback(async move {
+        let call: job::Callback = Callback::EditorCompositor(Box::new(
+            |editor: &mut Editor, compositor: &mut Compositor| {
+                let picker = shared_file_picker_for(editor);
+                compositor.push(Box::new(overlaid(picker)));
+            },
+        ));
+        Ok(call)
+    });
+    Ok(())
+}
+
 fn session_close(
     cx: &mut compositor::Context,
     _args: Args,
@@ -4304,6 +4325,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         aliases: &[],
         doc: "List the peers of the current collaborative session.",
         fun: session_peers,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "session-files",
+        aliases: &[],
+        doc: "Open a picker of the buffers shared in the current collaborative session.",
+        fun: session_files,
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),

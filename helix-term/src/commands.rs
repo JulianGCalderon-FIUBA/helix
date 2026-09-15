@@ -408,6 +408,7 @@ impl MappableCommand {
         file_explorer_in_current_directory, "Open file explorer at current working directory",
         code_action, "Perform code action",
         buffer_picker, "Open buffer picker",
+        shared_file_picker, "Open shared file picker",
         jumplist_picker, "Open jumplist picker",
         symbol_picker, "Open symbol picker",
         syntax_symbol_picker, "Open symbol picker from syntax information",
@@ -3400,6 +3401,71 @@ fn buffer_picker(cx: &mut Context) {
         Some((meta.id.into(), lines))
     });
     cx.push_layer(Box::new(overlaid(picker)));
+}
+
+struct SharedFileMeta {
+    id: DocumentId,
+    owner: String,
+    path: Option<PathBuf>,
+    shared_id: String,
+}
+
+fn shared_file_picker(cx: &mut Context) {
+    let picker = shared_file_picker_for(cx.editor);
+    cx.push_layer(Box::new(overlaid(picker)));
+}
+
+/// Lists every buffer shared in the collaborative session, local or remote.
+fn shared_file_picker_for(editor: &Editor) -> Picker<SharedFileMeta, PathStyleConfig> {
+    let local = editor.p2p_service.id;
+
+    let items = editor
+        .documents()
+        .filter_map(|doc| {
+            let replica = doc.crdt.as_ref()?;
+            let owner = replica.owner();
+            Some(SharedFileMeta {
+                id: doc.id(),
+                owner: if owner == local {
+                    "you".to_string()
+                } else {
+                    owner.fmt_short().to_string()
+                },
+                path: replica.path().map(ToOwned::to_owned),
+                shared_id: replica.shared_id().fmt_short(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let columns = [
+        PickerColumn::new("owner", |meta: &SharedFileMeta, _| {
+            meta.owner.as_str().into()
+        }),
+        PickerColumn::new("path", |meta: &SharedFileMeta, config: &PathStyleConfig| {
+            config.stylize(meta.path.as_deref(), None)
+        }),
+        PickerColumn::new("id", |meta: &SharedFileMeta, _| {
+            meta.shared_id.as_str().into()
+        }),
+    ];
+
+    Picker::new(
+        columns,
+        1,
+        items,
+        PathStyleConfig::new(&editor.theme),
+        |cx, meta, action| {
+            cx.editor.switch(meta.id, action);
+        },
+    )
+    .with_preview(|editor, meta| {
+        let doc = &editor.documents.get(&meta.id)?;
+        let lines = doc.selections().values().next().map(|selection| {
+            let cursor_line = selection.primary().cursor_line(doc.text().slice(..));
+            (cursor_line, cursor_line)
+        });
+        Some((meta.id.into(), lines))
+    })
 }
 
 fn jumplist_picker(cx: &mut Context) {
