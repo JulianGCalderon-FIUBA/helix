@@ -409,7 +409,7 @@ impl MappableCommand {
         file_explorer_in_current_directory, "Open file explorer at current working directory",
         code_action, "Perform code action",
         buffer_picker, "Open buffer picker",
-        shared_file_picker, "Open shared file picker",
+        push_session_file_picker, "Open session file picker",
         jumplist_picker, "Open jumplist picker",
         symbol_picker, "Open symbol picker",
         syntax_symbol_picker, "Open symbol picker from syntax information",
@@ -3432,20 +3432,20 @@ fn buffer_picker(cx: &mut Context) {
     cx.push_layer(Box::new(overlaid(picker)));
 }
 
-struct SharedFileMeta {
+struct SessionFileMeta {
     id: DocumentId,
     owner: String,
     path: Option<PathBuf>,
     shared_id: String,
 }
 
-fn shared_file_picker(cx: &mut Context) {
-    let picker = shared_file_picker_for(cx.editor);
+fn push_session_file_picker(cx: &mut Context) {
+    let picker = session_file_picker(cx.editor);
     cx.push_layer(Box::new(overlaid(picker)));
 }
 
 /// Lists every buffer shared in the collaborative session, local or remote.
-fn shared_file_picker_for(editor: &Editor) -> Picker<SharedFileMeta, PathStyleConfig> {
+fn session_file_picker(editor: &Editor) -> Picker<SessionFileMeta, PathStyleConfig> {
     let local = editor.p2p_service.id;
 
     let items = editor
@@ -3453,7 +3453,7 @@ fn shared_file_picker_for(editor: &Editor) -> Picker<SharedFileMeta, PathStyleCo
         .filter_map(|doc| {
             let replica = doc.crdt.as_ref()?;
             let owner = replica.owner();
-            Some(SharedFileMeta {
+            Some(SessionFileMeta {
                 id: doc.id(),
                 owner: if owner == local {
                     "you".to_string()
@@ -3467,13 +3467,16 @@ fn shared_file_picker_for(editor: &Editor) -> Picker<SharedFileMeta, PathStyleCo
         .collect::<Vec<_>>();
 
     let columns = [
-        PickerColumn::new("owner", |meta: &SharedFileMeta, _| {
+        PickerColumn::new("owner", |meta: &SessionFileMeta, _| {
             meta.owner.as_str().into()
         }),
-        PickerColumn::new("path", |meta: &SharedFileMeta, config: &PathStyleConfig| {
-            config.stylize(meta.path.as_deref(), None)
-        }),
-        PickerColumn::new("id", |meta: &SharedFileMeta, _| {
+        PickerColumn::new(
+            "path",
+            |meta: &SessionFileMeta, config: &PathStyleConfig| {
+                config.stylize(meta.path.as_deref(), None)
+            },
+        ),
+        PickerColumn::new("id", |meta: &SessionFileMeta, _| {
             meta.shared_id.as_str().into()
         }),
     ];
