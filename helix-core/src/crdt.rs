@@ -3,8 +3,11 @@
 //! Cola counts in whatever unit you decide and never checks. Helix indexes
 //! chars, so every `usize` crossing this boundary is a char index.
 
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
 use cola::{EncodedReplica, Insertion, ReplicaId};
+pub use iroh_base::EndpointId;
 use serde::{Deserialize, Serialize};
 
 use crate::{transaction::Operation, ChangeSet, Rope, Transaction};
@@ -36,13 +39,22 @@ pub fn replica_id() -> ReplicaId {
 
 pub struct Replica {
     shared_id: SharedId,
+    owner: EndpointId,
+    path: Option<PathBuf>,
     replica: cola::Replica,
 }
 
 impl Replica {
-    pub fn new(replica_id: ReplicaId, text: &Rope) -> Self {
+    pub fn new(
+        replica_id: ReplicaId,
+        owner: EndpointId,
+        path: Option<PathBuf>,
+        text: &Rope,
+    ) -> Self {
         Self {
             shared_id: SharedId::random(),
+            owner,
+            path,
             replica: cola::Replica::new(replica_id, text.len_chars()),
         }
     }
@@ -51,10 +63,27 @@ impl Replica {
         self.shared_id
     }
 
-    pub fn decode(shared_id: SharedId, replica_id: ReplicaId, encoded: &[u8]) -> Result<Self> {
+    pub fn owner(&self) -> EndpointId {
+        self.owner
+    }
+
+    /// The path relative to the owner's workspace.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    pub fn decode(
+        shared_id: SharedId,
+        owner: EndpointId,
+        path: Option<PathBuf>,
+        replica_id: ReplicaId,
+        encoded: &[u8],
+    ) -> Result<Self> {
         let encoded = EncodedReplica::from_bytes(encoded);
         Ok(Self {
             shared_id,
+            owner,
+            path,
             replica: cola::Replica::decode(replica_id, &encoded)?,
         })
     }

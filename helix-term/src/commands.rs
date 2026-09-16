@@ -24,6 +24,7 @@ use helix_core::{
     chars::char_is_word,
     command_line::{self, Args},
     comment,
+    crdt::{EndpointId, SharedId},
     doc_formatter::TextFormat,
     encoding, find_workspace,
     graphemes::{self, next_grapheme_boundary},
@@ -3394,6 +3395,63 @@ fn buffer_picker(cx: &mut Context) {
         Some((meta.id.into(), lines))
     });
     cx.push_layer(Box::new(overlaid(picker)));
+}
+
+/// Opens a picker of every buffer shared in the collaborative session
+fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
+    struct SessionFileMeta {
+        id: DocumentId,
+        owner: EndpointId,
+        path: Option<PathBuf>,
+        shared_id: SharedId,
+    }
+
+    let items = editor
+        .documents()
+        .filter_map(|doc| {
+            let replica = doc.crdt.as_ref()?;
+            Some(SessionFileMeta {
+                id: doc.id(),
+                owner: replica.owner(),
+                path: replica.path().map(ToOwned::to_owned),
+                shared_id: replica.shared_id(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let columns = [
+        PickerColumn::new("owner", |meta: &SessionFileMeta, _| {
+            meta.owner.fmt_short().to_string().into()
+        }),
+        PickerColumn::new(
+            "path",
+            |meta: &SessionFileMeta, config: &PathStyleConfig| {
+                config.stylize(meta.path.as_deref(), None)
+            },
+        ),
+        PickerColumn::new("id", |meta: &SessionFileMeta, _| {
+            meta.shared_id.fmt_short().into()
+        }),
+    ];
+
+    let picker = Picker::new(
+        columns,
+        1,
+        items,
+        PathStyleConfig::new(&editor.theme),
+        |cx, meta, action| {
+            cx.editor.switch(meta.id, action);
+        },
+    )
+    .with_preview(|editor, meta| {
+        let doc = &editor.documents.get(&meta.id)?;
+        let lines = doc.selections().values().next().map(|selection| {
+            let cursor_line = selection.primary().cursor_line(doc.text().slice(..));
+            (cursor_line, cursor_line)
+        });
+        Some((meta.id.into(), lines))
+    });
+    compositor.push(Box::new(overlaid(picker)));
 }
 
 fn jumplist_picker(cx: &mut Context) {

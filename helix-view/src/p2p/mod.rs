@@ -10,7 +10,7 @@ use anyhow::{bail, ensure, Result};
 use iroh::{
     endpoint::{presets, Connection, RecvStream, SendStream},
     protocol::{AcceptError, ProtocolHandler, Router},
-    Endpoint, EndpointAddr, EndpointId,
+    Endpoint, EndpointAddr, EndpointId, SecretKey,
 };
 use iroh_tickets::endpoint::EndpointTicket;
 use tokio::sync::mpsc::{unbounded_channel, Sender, UnboundedReceiver, UnboundedSender};
@@ -41,6 +41,7 @@ pub enum Request {
 
 /// Handle to the actor task that owns the Node.
 pub struct Service {
+    pub id: EndpointId,
     pub events: UnboundedReceiverStream<Event>,
     pub requests: UnboundedSender<Request>,
 }
@@ -50,8 +51,12 @@ impl Service {
         let (events_tx, events_rx) = unbounded_channel();
         let (requests_tx, mut requests_rx) = unbounded_channel();
 
+        let secret_key = SecretKey::generate();
+        let id = secret_key.public();
+
         tokio::spawn(async move {
             let endpoint = Endpoint::builder(presets::N0)
+                .secret_key(secret_key)
                 .bind()
                 .await
                 .expect("failed to bind the endpoint");
@@ -87,6 +92,7 @@ impl Service {
         });
 
         Service {
+            id,
             events: UnboundedReceiverStream::new(events_rx),
             requests: requests_tx,
         }

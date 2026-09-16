@@ -3026,12 +3026,21 @@ fn session_share(
         return Ok(());
     }
 
+    let owner = cx.editor.p2p_service.id;
     let doc = doc_mut!(cx.editor);
     ensure!(doc.crdt.is_none(), "buffer is already shared");
 
-    let replica = Replica::new(replica_id(), doc.text());
+    // Peers see the path relative to the workspace,
+    // or in full when the file is outside of it.
+    let path = doc.path().map(|path| {
+        let (workspace, _) = helix_loader::find_workspace();
+        path.strip_prefix(&workspace).unwrap_or(path).to_path_buf()
+    });
+
+    let replica = Replica::new(replica_id(), owner, path, doc.text());
     let message = Message::Share {
         id: replica.shared_id(),
+        path: replica.path().map(ToOwned::to_owned),
         text: doc.text().to_string(),
         replica: replica.encode(),
     };
@@ -3079,6 +3088,26 @@ fn session_peers(
                 compositor.replace_or_push("peers", popup);
             },
         )))
+    });
+    Ok(())
+}
+
+fn session_files(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    cx.jobs.callback(async move {
+        let call: job::Callback = Callback::EditorCompositor(Box::new(
+            |editor: &mut Editor, compositor: &mut Compositor| {
+                session_file_picker(editor, compositor)
+            },
+        ));
+        Ok(call)
     });
     Ok(())
 }
@@ -4290,6 +4319,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         aliases: &[],
         doc: "List the peers of the current collaborative session.",
         fun: session_peers,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "session-files",
+        aliases: &[],
+        doc: "Open a picker of the buffers shared in the current collaborative session.",
+        fun: session_files,
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),
