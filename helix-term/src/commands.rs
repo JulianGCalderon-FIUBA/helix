@@ -3397,16 +3397,16 @@ fn buffer_picker(cx: &mut Context) {
     cx.push_layer(Box::new(overlaid(picker)));
 }
 
-struct SessionFileMeta {
-    id: DocumentId,
-    owner: EndpointId,
-    path: Option<PathBuf>,
-    shared_id: SharedId,
-}
-
 /// Opens a picker of every buffer shared in the collaborative session, local
 /// or remote.
 fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
+    struct SessionFileMeta {
+        id: DocumentId,
+        owner: EndpointId,
+        path: Option<PathBuf>,
+        shared_id: SharedId,
+    }
+
     let items = editor
         .documents()
         .filter_map(|doc| {
