@@ -3287,12 +3287,12 @@ impl PathStyleConfig {
     }
 
     /// Styles a path in another peer's workspace as `owner:path`.
-    fn stylize_remote<'a>(&self, owner: EndpointId, path: Option<&'a Path>) -> Cell<'a> {
+    fn stylize_remote<'a>(&self, owner: EndpointId, path: &'a Path) -> Cell<'a> {
         let mut spans = vec![
             Span::styled(owner.fmt_short().to_string(), self.directory_style),
             Span::styled(":", self.colon_style),
         ];
-        spans.extend(self.spans(path, None));
+        spans.extend(self.spans(Some(path), None));
         Cell::from(Spans::from(spans))
     }
 
@@ -3341,10 +3341,9 @@ fn buffer_picker(cx: &mut Context) {
     let new_meta = |doc: &Document| {
         // A replica that was never written has no path of its own,
         // so it shows the path it has on its owner.
-        let remote = doc
-            .crdt
-            .as_ref()
-            .filter(|replica| doc.path().is_none() && replica.owner() != local);
+        let remote = doc.crdt.as_ref().filter(|replica| {
+            doc.path().is_none() && replica.owner() != local && replica.path().is_some()
+        });
 
         BufferMeta {
             id: doc.id(),
@@ -3390,9 +3389,9 @@ fn buffer_picker(cx: &mut Context) {
         }),
         PickerColumn::new(
             "path",
-            |meta: &BufferMeta, config: &PathStyleConfig| match meta.owner {
-                Some(owner) => config.stylize_remote(owner, meta.path.as_deref()),
-                None => config.stylize(meta.path.as_deref(), None),
+            |meta: &BufferMeta, config: &PathStyleConfig| match (meta.owner, meta.path.as_deref()) {
+                (Some(owner), Some(path)) => config.stylize_remote(owner, path),
+                _ => config.stylize(meta.path.as_deref(), None),
             },
         ),
     ];
