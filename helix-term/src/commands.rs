@@ -3397,8 +3397,7 @@ fn buffer_picker(cx: &mut Context) {
     cx.push_layer(Box::new(overlaid(picker)));
 }
 
-/// Opens a picker of every buffer shared in the collaborative session, local
-/// or remote.
+/// Opens a picker of every buffer shared in the collaborative session
 fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
     struct SessionFileMeta {
         id: DocumentId,
