@@ -409,7 +409,6 @@ impl MappableCommand {
         file_explorer_in_current_directory, "Open file explorer at current working directory",
         code_action, "Perform code action",
         buffer_picker, "Open buffer picker",
-        session_file_picker, "Open session file picker",
         jumplist_picker, "Open jumplist picker",
         symbol_picker, "Open symbol picker",
         syntax_symbol_picker, "Open symbol picker from syntax information",
@@ -3437,14 +3436,6 @@ struct SessionFileMeta {
     owner: EndpointId,
     path: Option<PathBuf>,
     shared_id: SharedId,
-}
-
-fn session_file_picker(cx: &mut Context) {
-    cx.callback.push(Box::new(
-        |compositor: &mut Compositor, cx: &mut compositor::Context| {
-            push_session_file_picker(cx.editor, compositor)
-        },
-    ));
 }
 
 /// Opens a picker of every buffer shared in the collaborative session, local
