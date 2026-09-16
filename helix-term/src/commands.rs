@@ -3287,7 +3287,7 @@ impl PathStyleConfig {
         Cell::from(Spans::from(self.spans(path, line)))
     }
 
-    /// Styles a path in another peer's workspace as `owner:path`, like scp.
+    /// Styles a path in another peer's workspace as `owner:path`.
     fn stylize_remote<'a>(&self, owner: EndpointId, path: Option<&'a Path>) -> Cell<'a> {
         let mut spans = vec![
             Span::styled(owner.fmt_short().to_string(), self.directory_style),

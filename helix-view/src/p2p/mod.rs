@@ -41,7 +41,6 @@ pub enum Request {
 
 /// Handle to the actor task that owns the Node.
 pub struct Service {
-    /// The id of the local endpoint, known before it binds.
     pub id: EndpointId,
     pub events: UnboundedReceiverStream<Event>,
     pub requests: UnboundedSender<Request>,

@@ -63,12 +63,11 @@ impl Replica {
         self.shared_id
     }
 
-    /// The peer that shared the document.
     pub fn owner(&self) -> EndpointId {
         self.owner
     }
 
-    /// The path of the document, relative to the owner's workspace.
+    /// The path relative to the owner's workspace.
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }
