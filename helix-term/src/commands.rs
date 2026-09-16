@@ -3406,7 +3406,7 @@ struct SessionFileMeta {
 
 /// Opens a picker of every buffer shared in the collaborative session, local
 /// or remote.
-fn push_session_file_picker(editor: &Editor, compositor: &mut Compositor) {
+fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
     let items = editor
         .documents()
         .filter_map(|doc| {
