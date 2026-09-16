@@ -3340,8 +3340,8 @@ fn buffer_picker(cx: &mut Context) {
     }
 
     let new_meta = |doc: &Document| {
-        // A replica that was never written has no path of its own, so it
-        // shows the path it has on its owner.
+        // A replica that was never written has no path of its own,
+        // so it shows the path it has on its owner.
         let remote = doc
             .crdt
             .as_ref()

@@ -3030,8 +3030,8 @@ fn session_share(
     let doc = doc_mut!(cx.editor);
     ensure!(doc.crdt.is_none(), "buffer is already shared");
 
-    // Peers see the path relative to the workspace, or in full when the file
-    // is outside of it.
+    // Peers see the path relative to the workspace,
+    // or in full when the file is outside of it.
     let path = doc.path().map(|path| {
         let (workspace, _) = helix_loader::find_workspace();
         path.strip_prefix(&workspace).unwrap_or(path).to_path_buf()
