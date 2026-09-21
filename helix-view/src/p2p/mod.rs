@@ -1,6 +1,6 @@
 pub mod proto;
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{ensure, Result};
 use iroh::{
     address_lookup::memory::MemoryLookup, endpoint::presets, protocol::Router, Endpoint,
     EndpointId, SecretKey,
@@ -58,9 +58,6 @@ impl Service {
             endpoint.online().await;
             log::info!("listening as {}", endpoint.id().fmt_short());
 
-            // Gossip opens and keeps its own connections to the members of each
-            // topic, and relays broadcasts through them. The router hands it the
-            // incoming connections that ask for its ALPN.
             let gossip = Gossip::builder()
                 .max_message_size(MAX_MESSAGE_SIZE)
                 .spawn(endpoint.clone());
@@ -70,8 +67,6 @@ impl Service {
 
             let mut session = Session::new(endpoint, gossip, events_tx);
 
-            // One task serves both the editor's requests and gossip's events,
-            // so the session needs no locks.
             loop {
                 tokio::select! {
                     request = requests_rx.recv() => {
@@ -103,20 +98,16 @@ impl Default for Service {
 struct Session {
     endpoint: Endpoint,
     gossip: Gossip,
-    /// Addresses learned from tickets, for gossip to dial.
+    /// Addresses learned from tickets for gossip to dial,
+    /// as it dials bootstrap peers by id alone.
     addresses: MemoryLookup,
     events: UnboundedSender<Event>,
-    /// The swarm we are in, if any. A topic is a gossip swarm: everyone
-    /// subscribed to the same id receives everyone's broadcasts. The
-    /// subscription is both how we broadcast and a stream of what happens
-    /// in the swarm, and dropping it leaves.
+    /// The swarm we are in, if any.
     topic: Option<(TopicId, GossipTopic)>,
 }
 
 impl Session {
     fn new(endpoint: Endpoint, gossip: Gossip, events: UnboundedSender<Event>) -> Self {
-        // Gossip dials bootstrap peers by id alone, so the address from a
-        // ticket has to be findable through the endpoint.
         let addresses = MemoryLookup::new();
         endpoint
             .address_lookup()
@@ -151,16 +142,11 @@ impl Session {
         }
     }
 
-    /// Invites into the current session, starting one if there is none.
     async fn ticket(&mut self) -> String {
         let topic = match &self.topic {
             Some((topic, _)) => *topic,
             None => {
-                // Gossip lets in anyone who knows the topic id, so a random id
-                // makes the ticket the only way in.
                 let topic = TopicId::from_bytes(rand::random());
-                // With no one to bootstrap from, this starts an empty swarm
-                // that others join through us.
                 let subscription = self
                     .gossip
                     .subscribe(topic, Vec::new())
@@ -185,13 +171,11 @@ impl Session {
             addr.id != self.endpoint.id(),
             "cannot join your own session"
         );
-        if let Some((current, _)) = &self.topic {
-            ensure!(*current != topic, "already in this session");
-            bail!("already in a session, close it before joining another");
-        }
+        ensure!(
+            self.topic.is_none(),
+            "already in a session, close it before joining another"
+        );
 
-        // We only need one member to get in. Gossip introduces us to the
-        // rest of the swarm by itself.
         let bootstrap = addr.id;
         self.addresses.add_endpoint_info(addr);
         let subscription = self.gossip.subscribe(topic, vec![bootstrap]).await?;
@@ -204,15 +188,13 @@ impl Session {
             return Ok(());
         };
 
-        // Reaches every member, relayed hop by hop if needed, but best-effort:
-        // a message can be lost or overtaken by a later one.
+        // Only best-effort delivery.
         subscription
             .broadcast(proto::encode(&message)?.into())
             .await?;
         Ok(())
     }
 
-    /// Leaves the topic: gossip does so once the subscription is dropped.
     fn close(&mut self) {
         self.topic = None;
     }
@@ -220,16 +202,12 @@ impl Session {
     async fn next_event(&mut self) -> Option<Result<GossipEvent, ApiError>> {
         match &mut self.topic {
             Some((_, subscription)) => subscription.next().await,
-            // Outside a session there is nothing to wait for, so the loop
-            // only serves requests.
             None => std::future::pending().await,
         }
     }
 
     fn on_event(&mut self, event: Option<Result<GossipEvent, ApiError>>) {
         match event {
-            // A direct connection to a member came up. It may be a newcomer,
-            // which is why the editor offers it every shared buffer.
             Some(Ok(GossipEvent::NeighborUp(id))) => {
                 log::info!("connected to {}", id.fmt_short());
                 let _ = self.events.send(Event::Connected(id));
@@ -237,8 +215,6 @@ impl Session {
             Some(Ok(GossipEvent::NeighborDown(id))) => {
                 log::info!("disconnected from {}", id.fmt_short());
             }
-            // A broadcast from some member. `delivered_from` is the neighbour
-            // that relayed it, not necessarily who wrote it.
             Some(Ok(GossipEvent::Received(message))) => match proto::decode(&message.content) {
                 Ok(message) => {
                     let _ = self.events.send(Event::Message(message));
@@ -249,15 +225,12 @@ impl Session {
                     err
                 )),
             },
-            // We read events slower than they arrived, so gossip dropped some.
-            // The subscription would carry on, but the dropped edits are lost
-            // for good, so leave instead of drifting apart unnoticed.
-            // TODO: recover the missed edits instead of leaving.
+            // We lost some messages. The dropped edits are lost for good, so
+            // leave instead of drifting apart unnoticed.
             Some(Ok(GossipEvent::Lagged)) => {
-                self.report("fell behind the session and left it, some edits were lost".into());
+                self.report("fell behind the session and left it".into());
                 self.close();
             }
-            // The subscription is gone, so we are out of the swarm.
             Some(Err(err)) => {
                 self.report(format!("session failed: {:#}", err));
                 self.close();
