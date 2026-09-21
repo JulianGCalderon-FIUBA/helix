@@ -273,7 +273,7 @@ impl Session {
                 )),
             },
             // We read events slower than they arrived, so gossip dropped some.
-            // It also closes the subscription, which ends the stream next.
+            // The subscription carries on, but what it dropped is lost.
             Some(Ok(GossipEvent::Lagged)) => {
                 self.report("fell behind the session, some edits were lost".into());
             }
