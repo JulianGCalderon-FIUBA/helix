@@ -2981,10 +2981,7 @@ fn session_new(
         .send(p2p::Request::Ticket(tx))
         .expect("p2p service should be running");
     cx.jobs.callback(async move {
-        // Starting the session can fail; the service reports why.
-        let Some(ticket) = rx.recv().await else {
-            return Ok(job::Callback::Editor(Box::new(|_| {})));
-        };
+        let ticket = rx.recv().await.expect("ticket should be returned");
         Ok(job::Callback::EditorCompositor(Box::new(
             move |editor: &mut Editor, _: &mut Compositor| {
                 let register = '+';
