@@ -1213,6 +1213,18 @@ impl Application {
             p2p::Event::Connected(peer) => {
                 self.editor
                     .set_status(format!("connected with {}", peer.fmt_short()));
+
+                // The peer may have joined late, so offer it every shared
+                // buffer. Peers that already have one ignore it.
+                for doc in self.editor.documents() {
+                    if let Some(replica) = &doc.crdt {
+                        let _ = self
+                            .editor
+                            .p2p_service
+                            .requests
+                            .send(p2p::Request::Broadcast(Message::share(replica, doc.text())));
+                    }
+                }
             }
             p2p::Event::Disconnected(peer) => {
                 self.editor
