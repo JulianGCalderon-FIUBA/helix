@@ -103,6 +103,5 @@
 | `:session-new` | Create a ticket for the collaborative session and yank it into system clipboard. |
 | `:session-join` | Join a collaborative session with the given ticket. |
 | `:session-share` | Share the focused document with every peer of the current collaborative session. |
-| `:session-peers` | List the peers of the current collaborative session. |
 | `:session-files` | Open a picker of the buffers shared in the current collaborative session. |
 | `:session-close` | Leave the current collaborative session. |

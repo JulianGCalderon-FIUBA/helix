@@ -30,7 +30,6 @@ pub enum Event {
 pub enum Request {
     Ticket(Sender<String>),
     Join(String),
-    Peers(Sender<Vec<EndpointId>>),
     Close,
     Broadcast(Message),
 }
@@ -140,10 +139,6 @@ impl Session {
                 Ok(())
             }
             Request::Join(ticket) => self.join(&ticket).await,
-            Request::Peers(chan) => {
-                let _ = chan.send(self.peers()).await;
-                Ok(())
-            }
             Request::Close => {
                 self.close();
                 Ok(())
@@ -215,15 +210,6 @@ impl Session {
             .broadcast(proto::encode(&message)?.into())
             .await?;
         Ok(())
-    }
-
-    /// Gossip only knows its direct neighbours, not every member. It keeps
-    /// up to five, so in a session of a few peers that is everyone.
-    fn peers(&self) -> Vec<EndpointId> {
-        self.topic
-            .as_ref()
-            .map(|(_, subscription)| subscription.neighbors().collect())
-            .unwrap_or_default()
     }
 
     /// Leaves the topic: gossip does so once the subscription is dropped.
