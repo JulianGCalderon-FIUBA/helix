@@ -1230,7 +1230,7 @@ impl Application {
                 self.editor
                     .set_status(format!("disconnected with {}", peer.fmt_short()));
             }
-            p2p::Event::Message { message, .. } => match message {
+            p2p::Event::Message(message) => match message {
                 Message::Share {
                     id,
                     owner,
@@ -1303,8 +1303,6 @@ impl Application {
                     }
                     doc.crdt = Some(crdt);
                 }
-
-                Message::Hello { .. } | Message::Welcome { .. } => {}
             },
             p2p::Event::Error(err) => {
                 self.editor.set_error(err);

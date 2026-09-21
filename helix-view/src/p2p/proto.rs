@@ -5,22 +5,19 @@ use helix_core::{
     crdt::{EndpointId, RemoteOperation, Replica, SharedId},
     Rope,
 };
-use iroh::{
-    endpoint::{ReadExactError, RecvStream, SendStream},
-    EndpointAddr,
-};
+use iroh::EndpointAddr;
+use iroh_gossip::TopicId;
+use iroh_tickets::{ParseError, Ticket};
 use serde::{Deserialize, Serialize};
 
-const MAX_BODY_SIZE: usize = 16 * 1024 * 1024;
+/// Gossip frames carry whole buffers in [`Message::Share`].
+pub const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
+
+/// Room left for gossip's own framing around a message.
+const FRAME_OVERHEAD: usize = 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
-    Hello {
-        addr: EndpointAddr,
-    },
-    Welcome {
-        peers: Vec<EndpointAddr>,
-    },
     Share {
         id: SharedId,
         // Whoever sends a Share is not necessarily the one who owns it.
@@ -49,37 +46,34 @@ impl Message {
 
 pub fn encode(message: &Message) -> Result<Vec<u8>> {
     let body = postcard::to_stdvec(message)?;
-    ensure!(body.len() <= MAX_BODY_SIZE, "message is too big");
-
-    let mut frame = Vec::with_capacity(4 + body.len());
-    frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
-    frame.extend_from_slice(&body);
-
-    Ok(frame)
+    ensure!(
+        body.len() <= MAX_MESSAGE_SIZE - FRAME_OVERHEAD,
+        "message is too big"
+    );
+    Ok(body)
 }
 
-pub fn decode_body(body: &[u8]) -> Result<Message> {
+pub fn decode(body: &[u8]) -> Result<Message> {
     Ok(postcard::from_bytes(body)?)
 }
 
-pub async fn write(send: &mut SendStream, message: &Message) -> Result<()> {
-    send.write_all(&encode(message)?).await?;
-    Ok(())
+/// Everything needed to join a session: which swarm, and one member to reach it through.
+///
+/// The topic is random, so the ticket doubles as the invitation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTicket {
+    pub topic: TopicId,
+    pub addr: EndpointAddr,
 }
 
-pub async fn read(recv: &mut RecvStream) -> Result<Option<Message>> {
-    let mut length = [0; 4];
-    match recv.read_exact(&mut length).await {
-        Ok(()) => {}
-        Err(ReadExactError::FinishedEarly(0)) => return Ok(None),
-        Err(err) => return Err(err.into()),
+impl Ticket for SessionTicket {
+    const KIND: &'static str = "helix";
+
+    fn encode_bytes(&self) -> Vec<u8> {
+        postcard::to_stdvec(self).expect("ticket should serialize")
     }
 
-    let length = u32::from_le_bytes(length) as usize;
-    ensure!(length <= MAX_BODY_SIZE, "body is too big");
-
-    let mut body = vec![0; length];
-    recv.read_exact(&mut body).await?;
-
-    decode_body(&body).map(Some)
+    fn decode_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
+        Ok(postcard::from_bytes(bytes)?)
+    }
 }
