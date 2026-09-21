@@ -136,13 +136,10 @@ impl Session {
 
     async fn handle(&mut self, request: Request) {
         let result = match request {
-            Request::Ticket(chan) => match self.ticket().await {
-                Ok(ticket) => {
-                    let _ = chan.send(ticket).await;
-                    Ok(())
-                }
-                Err(err) => Err(err),
-            },
+            Request::Ticket(chan) => {
+                let _ = chan.send(self.ticket().await).await;
+                Ok(())
+            }
             Request::Join(ticket) => self.join(&ticket).await,
             Request::Peers(chan) => {
                 let _ = chan.send(self.peers()).await;
@@ -161,7 +158,7 @@ impl Session {
     }
 
     /// Invites into the current session, starting one if there is none.
-    async fn ticket(&mut self) -> Result<String> {
+    async fn ticket(&mut self) -> String {
         let topic = match &self.topic {
             Some((topic, _)) => *topic,
             None => {
@@ -170,17 +167,21 @@ impl Session {
                 let topic = TopicId::from_bytes(rand::random());
                 // With no one to bootstrap from, this starts an empty swarm
                 // that others join through us.
-                let subscription = self.gossip.subscribe(topic, Vec::new()).await?;
+                let subscription = self
+                    .gossip
+                    .subscribe(topic, Vec::new())
+                    .await
+                    .expect("gossip should be running");
                 self.topic = Some((topic, subscription));
                 topic
             }
         };
 
-        Ok(SessionTicket {
+        SessionTicket {
             topic,
             addr: self.endpoint.addr(),
         }
-        .encode_string())
+        .encode_string()
     }
 
     async fn join(&mut self, ticket: &str) -> Result<()> {
