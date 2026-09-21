@@ -3040,6 +3040,7 @@ fn session_share(
     let replica = Replica::new(replica_id(), owner, path, doc.text());
     let message = Message::Share {
         id: replica.shared_id(),
+        owner: replica.owner(),
         path: replica.path().map(ToOwned::to_owned),
         text: doc.text().to_string(),
         replica: replica.encode(),
@@ -3051,44 +3052,6 @@ fn session_share(
         .requests
         .send(p2p::Request::Broadcast(message))
         .expect("p2p service should be running");
-    Ok(())
-}
-
-fn session_peers(
-    cx: &mut compositor::Context,
-    _args: Args,
-    event: PromptEvent,
-) -> anyhow::Result<()> {
-    if event != PromptEvent::Validate {
-        return Ok(());
-    }
-
-    let (tx, mut rx) = channel(1);
-    cx.editor
-        .p2p_service
-        .requests
-        .send(p2p::Request::Peers(tx))
-        .expect("p2p service should be running");
-    cx.jobs.callback(async move {
-        let peers = rx.recv().await.expect("peers should be returned");
-        Ok(job::Callback::EditorCompositor(Box::new(
-            move |editor: &mut Editor, compositor: &mut Compositor| {
-                let contents = ui::Markdown::new(
-                    format!(
-                        "peers: {}",
-                        peers
-                            .iter()
-                            .map(|peer| peer.fmt_short().to_string())
-                            .collect::<Vec<_>>()
-                            .join(","),
-                    ),
-                    editor.syn_loader.clone(),
-                );
-                let popup = Popup::new("peers", contents).auto_close(true);
-                compositor.replace_or_push("peers", popup);
-            },
-        )))
-    });
     Ok(())
 }
 
@@ -4308,17 +4271,6 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         aliases: &[],
         doc: "Share the focused document with every peer of the current collaborative session.",
         fun: session_share,
-        completer: CommandCompleter::none(),
-        signature: Signature {
-            positionals: (0, Some(0)),
-            ..Signature::DEFAULT
-        },
-    },
-    TypableCommand {
-        name: "session-peers",
-        aliases: &[],
-        doc: "List the peers of the current collaborative session.",
-        fun: session_peers,
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),

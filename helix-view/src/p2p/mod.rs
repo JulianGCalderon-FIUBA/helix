@@ -1,32 +1,28 @@
 pub mod proto;
 
-use std::{
-    collections::{HashMap, HashSet},
-    str::FromStr,
-    sync::{Arc, Mutex},
-};
-
-use anyhow::{bail, ensure, Result};
+use anyhow::{ensure, Result};
 use iroh::{
-    endpoint::{presets, Connection, RecvStream, SendStream},
-    protocol::{AcceptError, ProtocolHandler, Router},
-    Endpoint, EndpointAddr, EndpointId, SecretKey,
+    address_lookup::memory::MemoryLookup, endpoint::presets, protocol::Router, Endpoint,
+    EndpointId, SecretKey,
 };
-use iroh_tickets::endpoint::EndpointTicket;
-use tokio::sync::mpsc::{unbounded_channel, Sender, UnboundedReceiver, UnboundedSender};
+use iroh_gossip::{
+    api::{ApiError, Event as GossipEvent, GossipTopic},
+    Gossip, TopicId, ALPN,
+};
+use iroh_tickets::Ticket;
+use n0_future::StreamExt;
+use tokio::sync::mpsc::{unbounded_channel, Sender, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use proto::Message;
+use proto::{Message, SessionTicket};
 
-pub const ALPN: &[u8] = b"helix/session/0";
-
-const BYE: u32 = 0;
+/// Gossip defaults to 4 KiB, and a Share carries a whole buffer.
+const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum Event {
     Connected(EndpointId),
-    Disconnected(EndpointId),
-    Message { from: EndpointId, message: Message },
+    Message(Message),
     Error(String),
 }
 
@@ -34,12 +30,11 @@ pub enum Event {
 pub enum Request {
     Ticket(Sender<String>),
     Join(String),
-    Peers(Sender<Vec<EndpointId>>),
     Close,
     Broadcast(Message),
 }
 
-/// Handle to the actor task that owns the Node.
+/// Handle to the actor task that owns the Session.
 pub struct Service {
     pub id: EndpointId,
     pub events: UnboundedReceiverStream<Event>,
@@ -63,30 +58,24 @@ impl Service {
             endpoint.online().await;
             log::info!("listening as {}", endpoint.id().fmt_short());
 
-            let node = Node::new(endpoint.clone(), events_tx);
+            let gossip = Gossip::builder()
+                .max_message_size(MAX_MESSAGE_SIZE)
+                .spawn(endpoint.clone());
+            let _router = Router::builder(endpoint.clone())
+                .accept(ALPN, gossip.clone())
+                .spawn();
 
-            let _router = Router::builder(endpoint).accept(ALPN, node.clone()).spawn();
+            let mut session = Session::new(endpoint, gossip, events_tx);
 
-            while let Some(request) = requests_rx.recv().await {
-                let result = match request {
-                    Request::Ticket(chan) => {
-                        let _ = chan.send(node.ticket()).await;
-                        continue;
+            loop {
+                tokio::select! {
+                    request = requests_rx.recv() => {
+                        let Some(request) = request else {
+                            break;
+                        };
+                        session.handle(request).await;
                     }
-                    Request::Join(ticket) => node.join(&ticket),
-                    Request::Peers(chan) => {
-                        let _ = chan.send(node.peers()).await;
-                        continue;
-                    }
-                    Request::Close => {
-                        node.close();
-                        continue;
-                    }
-                    Request::Broadcast(message) => node.broadcast(message),
-                };
-
-                if let Err(err) = result {
-                    node.report(format!("{:#}", err));
+                    event = session.next_event() => session.on_event(event),
                 }
             }
         });
@@ -105,258 +94,156 @@ impl Default for Service {
     }
 }
 
-#[derive(Debug)]
-struct Peer {
-    addr: EndpointAddr,
-    connection: Connection,
-    outbox: UnboundedSender<Message>,
-}
-
-/// The local node in the peer mesh. Cloned into every connection task.
-#[derive(Debug, Clone)]
-struct Node {
+/// A collaborative session, as a protocol on top of gossip.
+struct Session {
     endpoint: Endpoint,
+    gossip: Gossip,
+    /// Addresses learned from tickets for gossip to dial,
+    /// as it dials bootstrap peers by id alone.
+    addresses: MemoryLookup,
     events: UnboundedSender<Event>,
-    peers: Arc<Mutex<HashMap<EndpointId, Peer>>>,
-    dialing: Arc<Mutex<HashSet<EndpointId>>>,
+    /// The swarm we are in, if any.
+    topic: Option<(TopicId, GossipTopic)>,
 }
 
-impl Node {
-    fn new(endpoint: Endpoint, events: UnboundedSender<Event>) -> Self {
+impl Session {
+    fn new(endpoint: Endpoint, gossip: Gossip, events: UnboundedSender<Event>) -> Self {
+        let addresses = MemoryLookup::new();
+        endpoint
+            .address_lookup()
+            .expect("endpoint should be open")
+            .add(addresses.clone());
+
         Self {
             endpoint,
+            gossip,
+            addresses,
             events,
-            peers: Arc::default(),
-            dialing: Arc::default(),
+            topic: None,
         }
     }
 
-    fn id(&self) -> EndpointId {
-        self.endpoint.id()
+    async fn handle(&mut self, request: Request) {
+        let result = match request {
+            Request::Ticket(chan) => {
+                let _ = chan.send(self.ticket().await).await;
+                Ok(())
+            }
+            Request::Join(ticket) => self.join(&ticket).await,
+            Request::Close => {
+                self.close();
+                Ok(())
+            }
+            Request::Broadcast(message) => self.broadcast(message).await,
+        };
+
+        if let Err(err) = result {
+            self.report(format!("{:#}", err));
+        }
     }
 
-    fn emit(&self, event: Event) {
-        let _ = self.events.send(event);
+    async fn ticket(&mut self) -> String {
+        let topic = match &self.topic {
+            Some((topic, _)) => *topic,
+            None => {
+                let topic = TopicId::from_bytes(rand::random());
+                let subscription = self
+                    .gossip
+                    .subscribe(topic, Vec::new())
+                    .await
+                    .expect("gossip should be running");
+                self.topic = Some((topic, subscription));
+                topic
+            }
+        };
+
+        SessionTicket {
+            topic,
+            addr: self.endpoint.addr(),
+        }
+        .encode_string()
+    }
+
+    async fn join(&mut self, ticket: &str) -> Result<()> {
+        let SessionTicket { topic, addr } = SessionTicket::decode_string(ticket)?;
+
+        ensure!(
+            addr.id != self.endpoint.id(),
+            "cannot join your own session"
+        );
+        ensure!(
+            self.topic.is_none(),
+            "already in a session, close it before joining another"
+        );
+
+        let bootstrap = addr.id;
+        self.addresses.add_endpoint_info(addr);
+        let subscription = self.gossip.subscribe(topic, vec![bootstrap]).await?;
+        self.topic = Some((topic, subscription));
+        Ok(())
+    }
+
+    async fn broadcast(&mut self, message: Message) -> Result<()> {
+        let Some((_, subscription)) = &mut self.topic else {
+            return Ok(());
+        };
+
+        // Only best-effort delivery.
+        subscription
+            .broadcast(proto::encode(&message)?.into())
+            .await?;
+        Ok(())
+    }
+
+    fn close(&mut self) {
+        self.topic = None;
+    }
+
+    async fn next_event(&mut self) -> Option<Result<GossipEvent, ApiError>> {
+        match &mut self.topic {
+            Some((_, subscription)) => subscription.next().await,
+            None => std::future::pending().await,
+        }
+    }
+
+    fn on_event(&mut self, event: Option<Result<GossipEvent, ApiError>>) {
+        match event {
+            Some(Ok(GossipEvent::NeighborUp(id))) => {
+                log::info!("connected to {}", id.fmt_short());
+                let _ = self.events.send(Event::Connected(id));
+            }
+            Some(Ok(GossipEvent::NeighborDown(id))) => {
+                log::info!("disconnected from {}", id.fmt_short());
+            }
+            Some(Ok(GossipEvent::Received(message))) => match proto::decode(&message.content) {
+                Ok(message) => {
+                    let _ = self.events.send(Event::Message(message));
+                }
+                Err(err) => self.report(format!(
+                    "bad message from {}: {:#}",
+                    message.delivered_from.fmt_short(),
+                    err
+                )),
+            },
+            // We lost some messages. The dropped edits are lost for good, so
+            // leave instead of drifting apart unnoticed.
+            Some(Ok(GossipEvent::Lagged)) => {
+                self.report("fell behind the session and left it".into());
+                self.close();
+            }
+            Some(Err(err)) => {
+                self.report(format!("session failed: {:#}", err));
+                self.close();
+            }
+            None => {
+                self.report("left the session".into());
+                self.close();
+            }
+        }
     }
 
     fn report(&self, error: String) {
         log::error!("{error}");
-        self.emit(Event::Error(error));
-    }
-
-    fn ticket(&self) -> String {
-        EndpointTicket::new(self.endpoint.addr()).to_string()
-    }
-
-    fn join(&self, ticket: &str) -> Result<()> {
-        let ticket = EndpointTicket::from_str(ticket)?;
-        let addr = ticket.endpoint_addr().clone();
-
-        ensure!(addr.id != self.id(), "cannot join your own session");
-        ensure!(
-            !self.peers.lock().unwrap().contains_key(&addr.id),
-            "already connected to {}",
-            addr.id.fmt_short()
-        );
-
-        self.start_connect(addr);
-
-        Ok(())
-    }
-
-    fn broadcast(&self, message: Message) -> Result<()> {
-        let peers = self.peers.lock().unwrap();
-
-        for peer in peers.values() {
-            let _ = peer.outbox.send(message.clone());
-        }
-        Ok(())
-    }
-
-    fn peers(&self) -> Vec<EndpointId> {
-        self.peers.lock().unwrap().keys().copied().collect()
-    }
-
-    fn close(&self) {
-        let peers = std::mem::take(&mut *self.peers.lock().unwrap());
-        for (id, peer) in peers {
-            peer.connection.close(BYE.into(), b"bye");
-            log::info!("disconnected from {}", id.fmt_short());
-            self.emit(Event::Disconnected(id));
-        }
-    }
-
-    fn start_connect(&self, addr: EndpointAddr) {
-        let id = addr.id;
-        if id == self.id()
-            || self.peers.lock().unwrap().contains_key(&id)
-            || !self.dialing.lock().unwrap().insert(id)
-        {
-            return;
-        }
-
-        let node = self.clone();
-        tokio::spawn(async move {
-            let result = node.connect(addr).await;
-            node.dialing.lock().unwrap().remove(&id);
-            if let Err(err) = result {
-                node.report(format!(
-                    "failed to connect to {}: {:#}",
-                    id.fmt_short(),
-                    err
-                ));
-            }
-        });
-    }
-
-    async fn connect(&self, addr: EndpointAddr) -> Result<()> {
-        let connection = self.endpoint.connect(addr.clone(), ALPN).await?;
-        let (mut send, mut recv) = connection.open_bi().await?;
-
-        proto::write(
-            &mut send,
-            &Message::Hello {
-                addr: self.endpoint.addr(),
-            },
-        )
-        .await?;
-
-        let Some(Message::Welcome { peers }) = proto::read(&mut recv).await? else {
-            bail!("expected a welcome");
-        };
-
-        for peer in peers {
-            self.start_connect(peer);
-        }
-
-        self.serve(addr, connection, send, recv).await;
-
-        Ok(())
-    }
-
-    async fn answer(&self, connection: Connection) -> Result<()> {
-        let (mut send, mut recv) = connection.accept_bi().await?;
-
-        let Some(Message::Hello { addr }) = proto::read(&mut recv).await? else {
-            bail!("expected a hello");
-        };
-        ensure!(
-            addr.id == connection.remote_id(),
-            "hello address does not match the connection identity",
-        );
-
-        proto::write(
-            &mut send,
-            &Message::Welcome {
-                peers: self.addrs(),
-            },
-        )
-        .await?;
-
-        self.serve(addr, connection, send, recv).await;
-
-        Ok(())
-    }
-
-    async fn serve(
-        &self,
-        addr: EndpointAddr,
-        connection: Connection,
-        send: SendStream,
-        mut recv: RecvStream,
-    ) {
-        let id = addr.id;
-        let (outbox, queue) = unbounded_channel();
-
-        self.peers.lock().unwrap().insert(
-            addr.id,
-            Peer {
-                addr,
-                connection: connection.clone(),
-                outbox,
-            },
-        );
-        self.start_writer(connection.clone(), send, queue);
-        log::info!("connected to {}", id.fmt_short());
-        self.emit(Event::Connected(id));
-
-        loop {
-            match proto::read(&mut recv).await {
-                Ok(Some(message)) => self.handle(id, message),
-                Ok(None) => break,
-                Err(err) => {
-                    if connection.close_reason().is_none() {
-                        self.report(format!("failed to read from {}: {:#}", id.fmt_short(), err));
-                    }
-                    break;
-                }
-            }
-        }
-
-        if self.peers.lock().unwrap().remove(&id).is_some() {
-            connection.close(BYE.into(), b"bye");
-            log::info!("disconnected from {}", id.fmt_short());
-            self.emit(Event::Disconnected(id));
-        }
-    }
-
-    fn start_writer(
-        &self,
-        connection: Connection,
-        mut send: SendStream,
-        mut queue: UnboundedReceiver<Message>,
-    ) {
-        let node = self.clone();
-        tokio::spawn(async move {
-            let id = connection.remote_id();
-
-            while let Some(message) = queue.recv().await {
-                if let Err(err) = proto::write(&mut send, &message).await {
-                    if connection.close_reason().is_none() {
-                        node.report(format!("failed to write to {}: {:#}", id.fmt_short(), err));
-                    }
-                    break;
-                }
-            }
-
-            let _ = send.finish();
-        });
-    }
-
-    fn handle(&self, from: EndpointId, message: Message) {
-        match message {
-            Message::Share { .. } | Message::Edit { .. } => {
-                self.emit(Event::Message { from, message })
-            }
-            Message::Hello { .. } | Message::Welcome { .. } => self.report(format!(
-                "unexpected handshake message from {}",
-                from.fmt_short()
-            )),
-        }
-    }
-
-    fn addrs(&self) -> Vec<EndpointAddr> {
-        self.peers
-            .lock()
-            .unwrap()
-            .values()
-            .map(|peer| peer.addr.clone())
-            .collect()
-    }
-}
-
-impl ProtocolHandler for Node {
-    async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
-        let remote = connection.remote_id();
-
-        if let Err(err) = self.answer(connection).await {
-            self.report(format!(
-                "failed to accept connection from {}: {:#}",
-                remote.fmt_short(),
-                err
-            ));
-        }
-
-        Ok(())
+        let _ = self.events.send(Event::Error(error));
     }
 }

@@ -1213,14 +1213,29 @@ impl Application {
             p2p::Event::Connected(peer) => {
                 self.editor
                     .set_status(format!("connected with {}", peer.fmt_short()));
+
+                // Offer every shared buffer to late joiners.
+                for doc in self.editor.documents() {
+                    if let Some(replica) = &doc.crdt {
+                        let message = Message::Share {
+                            id: replica.shared_id(),
+                            owner: replica.owner(),
+                            path: replica.path().map(ToOwned::to_owned),
+                            text: doc.text().to_string(),
+                            replica: replica.encode(),
+                        };
+                        let _ = self
+                            .editor
+                            .p2p_service
+                            .requests
+                            .send(p2p::Request::Broadcast(message));
+                    }
+                }
             }
-            p2p::Event::Disconnected(peer) => {
-                self.editor
-                    .set_status(format!("disconnected with {}", peer.fmt_short()));
-            }
-            p2p::Event::Message { from, message } => match message {
+            p2p::Event::Message(message) => match message {
                 Message::Share {
                     id,
+                    owner,
                     path,
                     text,
                     replica,
@@ -1234,13 +1249,13 @@ impl Application {
                     }
 
                     let status = match &path {
-                        Some(path) => format!("{} shared {}", from.fmt_short(), path.display()),
+                        Some(path) => format!("{} shared {}", owner.fmt_short(), path.display()),
                         None => {
-                            format!("{} shared a buffer ({})", from.fmt_short(), id.fmt_short())
+                            format!("{} shared a buffer ({})", owner.fmt_short(), id.fmt_short())
                         }
                     };
 
-                    let crdt = match Replica::decode(id, from, path, replica_id(), &replica) {
+                    let crdt = match Replica::decode(id, owner, path, replica_id(), &replica) {
                         Ok(crdt) => crdt,
                         Err(err) => {
                             self.editor
@@ -1290,8 +1305,6 @@ impl Application {
                     }
                     doc.crdt = Some(crdt);
                 }
-
-                Message::Hello { .. } | Message::Welcome { .. } => {}
             },
             p2p::Event::Error(err) => {
                 self.editor.set_error(err);
