@@ -1,17 +1,11 @@
 use std::path::PathBuf;
 
-use anyhow::{ensure, Result};
+use anyhow::Result;
 use helix_core::crdt::{EndpointId, RemoteOperation, SharedId};
 use iroh::EndpointAddr;
 use iroh_gossip::TopicId;
 use iroh_tickets::{ParseError, Ticket};
 use serde::{Deserialize, Serialize};
-
-/// Gossip frames carry whole buffers in [`Message::Share`].
-pub const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
-
-/// Room left for gossip's own framing around a message.
-const FRAME_OVERHEAD: usize = 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
@@ -30,12 +24,7 @@ pub enum Message {
 }
 
 pub fn encode(message: &Message) -> Result<Vec<u8>> {
-    let body = postcard::to_stdvec(message)?;
-    ensure!(
-        body.len() <= MAX_MESSAGE_SIZE - FRAME_OVERHEAD,
-        "message is too big"
-    );
-    Ok(body)
+    Ok(postcard::to_stdvec(message)?)
 }
 
 pub fn decode(body: &[u8]) -> Result<Message> {

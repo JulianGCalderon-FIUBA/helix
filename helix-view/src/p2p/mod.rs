@@ -22,7 +22,10 @@ use tokio::{
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use proto::{Message, SessionTicket, MAX_MESSAGE_SIZE};
+use proto::{Message, SessionTicket};
+
+/// Gossip defaults to 4 KiB, and a Share carries a whole buffer.
+const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum Event {
