@@ -22,7 +22,6 @@ const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 #[derive(Debug)]
 pub enum Event {
     Connected(EndpointId),
-    Disconnected(EndpointId),
     Message(Message),
     Error(String),
 }
@@ -229,14 +228,7 @@ impl Session {
 
     /// Leaves the topic: gossip does so once the subscription is dropped.
     fn close(&mut self) {
-        let Some((_, subscription)) = self.topic.take() else {
-            return;
-        };
-
-        for id in subscription.neighbors() {
-            log::info!("disconnected from {}", id.fmt_short());
-            let _ = self.events.send(Event::Disconnected(id));
-        }
+        self.topic = None;
     }
 
     async fn next_event(&mut self) -> Option<Result<GossipEvent, ApiError>> {
@@ -258,7 +250,6 @@ impl Session {
             }
             Some(Ok(GossipEvent::NeighborDown(id))) => {
                 log::info!("disconnected from {}", id.fmt_short());
-                let _ = self.events.send(Event::Disconnected(id));
             }
             // A broadcast from some member. `delivered_from` is the neighbour
             // that relayed it, not necessarily who wrote it.

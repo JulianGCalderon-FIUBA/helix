@@ -1232,10 +1232,6 @@ impl Application {
                     }
                 }
             }
-            p2p::Event::Disconnected(peer) => {
-                self.editor
-                    .set_status(format!("disconnected with {}", peer.fmt_short()));
-            }
             p2p::Event::Message(message) => match message {
                 Message::Share {
                     id,
