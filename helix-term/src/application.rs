@@ -1218,9 +1218,10 @@ impl Application {
                 self.editor
                     .set_status(format!("disconnected with {}", peer.fmt_short()));
             }
-            p2p::Event::Message { from, message } => match message {
+            p2p::Event::Message { message, .. } => match message {
                 Message::Share {
                     id,
+                    owner,
                     path,
                     text,
                     replica,
@@ -1234,13 +1235,13 @@ impl Application {
                     }
 
                     let status = match &path {
-                        Some(path) => format!("{} shared {}", from.fmt_short(), path.display()),
+                        Some(path) => format!("{} shared {}", owner.fmt_short(), path.display()),
                         None => {
-                            format!("{} shared a buffer ({})", from.fmt_short(), id.fmt_short())
+                            format!("{} shared a buffer ({})", owner.fmt_short(), id.fmt_short())
                         }
                     };
 
-                    let crdt = match Replica::decode(id, from, path, replica_id(), &replica) {
+                    let crdt = match Replica::decode(id, owner, path, replica_id(), &replica) {
                         Ok(crdt) => crdt,
                         Err(err) => {
                             self.editor

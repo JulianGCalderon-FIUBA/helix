@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use anyhow::{ensure, Result};
-use helix_core::crdt::{RemoteOperation, SharedId};
+use helix_core::{
+    crdt::{EndpointId, RemoteOperation, Replica, SharedId},
+    Rope,
+};
 use iroh::{
     endpoint::{ReadExactError, RecvStream, SendStream},
     EndpointAddr,
@@ -20,6 +23,8 @@ pub enum Message {
     },
     Share {
         id: SharedId,
+        // Whoever sends a Share is not necessarily the one who owns it.
+        owner: EndpointId,
         path: Option<PathBuf>,
         text: String,
         replica: Vec<u8>,
@@ -28,6 +33,18 @@ pub enum Message {
         id: SharedId,
         op: RemoteOperation,
     },
+}
+
+impl Message {
+    pub fn share(replica: &Replica, text: &Rope) -> Self {
+        Message::Share {
+            id: replica.shared_id(),
+            owner: replica.owner(),
+            path: replica.path().map(ToOwned::to_owned),
+            text: text.to_string(),
+            replica: replica.encode(),
+        }
+    }
 }
 
 pub fn encode(message: &Message) -> Result<Vec<u8>> {
