@@ -3041,7 +3041,13 @@ fn session_share(
     });
 
     let replica = Replica::new(replica_id(), owner, path, doc.text());
-    let message = Message::share(&replica, doc.text());
+    let message = Message::Share {
+        id: replica.shared_id(),
+        owner: replica.owner(),
+        path: replica.path().map(ToOwned::to_owned),
+        text: doc.text().to_string(),
+        replica: replica.encode(),
+    };
     doc.crdt = Some(replica);
 
     cx.editor

@@ -1218,11 +1218,18 @@ impl Application {
                 // buffer. Peers that already have one ignore it.
                 for doc in self.editor.documents() {
                     if let Some(replica) = &doc.crdt {
+                        let message = Message::Share {
+                            id: replica.shared_id(),
+                            owner: replica.owner(),
+                            path: replica.path().map(ToOwned::to_owned),
+                            text: doc.text().to_string(),
+                            replica: replica.encode(),
+                        };
                         let _ = self
                             .editor
                             .p2p_service
                             .requests
-                            .send(p2p::Request::Broadcast(Message::share(replica, doc.text())));
+                            .send(p2p::Request::Broadcast(message));
                     }
                 }
             }
