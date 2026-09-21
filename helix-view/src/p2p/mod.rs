@@ -68,7 +68,14 @@ impl Service {
             endpoint.online().await;
             log::info!("listening as {}", endpoint.id().fmt_short());
 
-            let mut node = Node::new(endpoint, events_tx);
+            let gossip = Gossip::builder()
+                .max_message_size(MAX_MESSAGE_SIZE)
+                .spawn(endpoint.clone());
+            let _router = Router::builder(endpoint.clone())
+                .accept(ALPN, gossip.clone())
+                .spawn();
+
+            let mut node = Node::new(endpoint, gossip, events_tx);
 
             while let Some(request) = requests_rx.recv().await {
                 let result = match request {
@@ -127,18 +134,10 @@ struct Node {
     addresses: MemoryLookup,
     events: UnboundedSender<Event>,
     session: Option<Session>,
-    _router: Router,
 }
 
 impl Node {
-    fn new(endpoint: Endpoint, events: UnboundedSender<Event>) -> Self {
-        let gossip = Gossip::builder()
-            .max_message_size(MAX_MESSAGE_SIZE)
-            .spawn(endpoint.clone());
-        let router = Router::builder(endpoint.clone())
-            .accept(ALPN, gossip.clone())
-            .spawn();
-
+    fn new(endpoint: Endpoint, gossip: Gossip, events: UnboundedSender<Event>) -> Self {
         // Gossip dials bootstrap peers by id alone, so the address from a
         // ticket has to be findable through the endpoint.
         let addresses = MemoryLookup::new();
@@ -153,7 +152,6 @@ impl Node {
             addresses,
             events,
             session: None,
-            _router: router,
         }
     }
 
