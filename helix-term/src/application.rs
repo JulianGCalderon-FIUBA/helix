@@ -1214,8 +1214,7 @@ impl Application {
                 self.editor
                     .set_status(format!("connected with {}", peer.fmt_short()));
 
-                // The peer may have joined late, so offer it every shared
-                // buffer. Peers that already have one ignore it.
+                // Offer every shared buffer to late joiners.
                 for doc in self.editor.documents() {
                     if let Some(replica) = &doc.crdt {
                         let message = Message::Share {

@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 pub enum Message {
     Share {
         id: SharedId,
-        // Whoever sends a Share is not necessarily the one who owns it.
         owner: EndpointId,
         path: Option<PathBuf>,
         text: String,
@@ -31,9 +30,6 @@ pub fn decode(body: &[u8]) -> Result<Message> {
     Ok(postcard::from_bytes(body)?)
 }
 
-/// Everything needed to join a session: which swarm, and one member to reach it through.
-///
-/// The topic is random, so the ticket doubles as the invitation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionTicket {
     pub topic: TopicId,
