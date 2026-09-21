@@ -264,9 +264,12 @@ impl Session {
                 )),
             },
             // We read events slower than they arrived, so gossip dropped some.
-            // The subscription carries on, but what it dropped is lost.
+            // The subscription would carry on, but the dropped edits are lost
+            // for good, so leave instead of drifting apart unnoticed.
+            // TODO: recover the missed edits instead of leaving.
             Some(Ok(GossipEvent::Lagged)) => {
-                self.report("fell behind the session, some edits were lost".into());
+                self.report("fell behind the session and left it, some edits were lost".into());
+                self.close();
             }
             // The subscription is gone, so we are out of the swarm.
             Some(Err(err)) => {
