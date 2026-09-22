@@ -27,6 +27,8 @@ const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 pub enum Event {
     NeighborUp(EndpointId),
     Received(Bytes),
+    /// The node left the session by itself, for the given reason.
+    Closed(String),
     Error(String),
 }
 
@@ -271,18 +273,19 @@ impl Node {
             // We lost some messages. The dropped edits are lost for good, so
             // leave instead of drifting apart unnoticed.
             Some(Ok(GossipEvent::Lagged)) => {
-                self.report("fell behind the session and left it".into());
-                self.close();
+                self.drop_topic("fell behind the session and left it".into())
             }
-            Some(Err(err)) => {
-                self.report(format!("session failed: {:#}", err));
-                self.close();
-            }
-            None => {
-                self.report("left the session".into());
-                self.close();
-            }
+            Some(Err(err)) => self.drop_topic(format!("session failed: {:#}", err)),
+            None => self.drop_topic("left the session".into()),
         }
+    }
+
+    /// Leaves the session on our own, unlike [`Request::Close`], so the
+    /// editor has to hear about it.
+    fn drop_topic(&mut self, reason: String) {
+        log::error!("{reason}");
+        self.close();
+        let _ = self.events.send(Event::Closed(reason));
     }
 
     fn report(&self, error: String) {

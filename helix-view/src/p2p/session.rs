@@ -90,11 +90,15 @@ impl Editor {
     }
 
     pub fn leave_session(&mut self) {
-        // Leaving drops every peer, so nothing is shared any more.
+        self.p2p.close();
+        self.unshare_all();
+    }
+
+    /// Without a session there are no peers, so nothing is shared any more.
+    fn unshare_all(&mut self) {
         for doc in self.documents_mut() {
             doc.shared = None;
         }
-        self.p2p.close();
     }
 
     pub fn handle_p2p_event(&mut self, event: Event) {
@@ -121,6 +125,12 @@ impl Editor {
                 Ok(Message::Edit { id, op }) => self.apply_remote(id, &op),
                 Err(err) => self.set_error(format!("bad message: {err:#}")),
             },
+            // Otherwise the buffers would still look shared, while their
+            // edits went nowhere.
+            Event::Closed(reason) => {
+                self.unshare_all();
+                self.set_error(reason);
+            }
             Event::Error(err) => self.set_error(err),
         }
     }
