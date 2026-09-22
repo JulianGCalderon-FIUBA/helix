@@ -14,7 +14,7 @@ use helix_core::line_ending;
 use helix_stdx::path::home_dir;
 use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
 use helix_view::editor::{CloseError, ConfigEvent};
-use helix_view::p2p::proto::Message;
+use helix_view::p2p::proto::Announcement;
 use helix_view::{expansion, p2p};
 use serde_json::Value;
 use tokio::sync::mpsc::channel;
@@ -3038,19 +3038,24 @@ fn session_share(
     });
 
     let replica = Replica::new(replica_id(), owner, path, doc.text());
-    let message = Message::Share {
-        id: replica.shared_id(),
-        owner: replica.owner(),
-        path: replica.path().map(ToOwned::to_owned),
-        text: doc.text().to_string(),
-        replica: replica.encode(),
-    };
+    let announcement = Announcement::new(
+        replica.shared_id(),
+        owner,
+        replica.path().map(ToOwned::to_owned),
+    );
     doc.crdt = Some(replica);
-
     cx.editor
-        .p2p_service
-        .requests
-        .send(p2p::Request::Broadcast(message))
+        .shared_files
+        .insert(announcement.id, announcement.clone());
+
+    // Join the file's topic before announcing it, so whoever opens
+    // the file finds us there.
+    let requests = &cx.editor.p2p_service.requests;
+    requests
+        .send(p2p::Request::Subscribe(announcement.clone()))
+        .expect("p2p service should be running");
+    requests
+        .send(p2p::Request::Announce(announcement))
         .expect("p2p service should be running");
     Ok(())
 }
@@ -3088,6 +3093,8 @@ fn session_close(
     for doc in cx.editor.documents_mut() {
         doc.crdt = None;
     }
+    // The files were announced in the session we leave.
+    cx.editor.shared_files.clear();
 
     cx.editor
         .p2p_service

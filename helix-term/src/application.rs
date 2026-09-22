@@ -16,7 +16,7 @@ use helix_view::{
     document::{Document, DocumentOpenError, DocumentSavedEventResult},
     editor::{Action, ConfigEvent, EditorEvent},
     graphics::Rect,
-    p2p::{self, proto::Message},
+    p2p::{self, proto::FileMessage},
     theme,
     tree::Layout,
     Align, Editor,
@@ -1214,102 +1214,146 @@ impl Application {
                 self.editor
                     .set_status(format!("connected with {}", peer.fmt_short()));
 
-                // Offer every shared buffer to late joiners.
-                for doc in self.editor.documents() {
-                    if let Some(replica) = &doc.crdt {
-                        let message = Message::Share {
-                            id: replica.shared_id(),
-                            owner: replica.owner(),
-                            path: replica.path().map(ToOwned::to_owned),
-                            text: doc.text().to_string(),
-                            replica: replica.encode(),
-                        };
-                        let _ = self
-                            .editor
-                            .p2p_service
-                            .requests
-                            .send(p2p::Request::Broadcast(message));
+                // Announcements go out once, so a peer that joins later would
+                // never learn about the files shared before it. Everyone
+                // announces every file it knows of instead, which is cheap
+                // since announcements carry no contents.
+                for announcement in self.editor.shared_files.values() {
+                    let _ = self
+                        .editor
+                        .p2p_service
+                        .requests
+                        .send(p2p::Request::Announce(announcement.clone()));
+                }
+            }
+            p2p::Event::Announced(announcement) => {
+                // Files are announced again whenever someone connects.
+                if self.editor.shared_files.contains_key(&announcement.id) {
+                    return;
+                }
+
+                let owner = announcement.owner.fmt_short();
+                let status = match &announcement.path {
+                    Some(path) => format!("{owner} shared {}", path.display()),
+                    None => format!("{owner} shared a buffer ({})", announcement.id.fmt_short()),
+                };
+                // Join every shared file, which opens it once its contents
+                // arrive, as sharing did before files had topics of their own.
+                let _ = self
+                    .editor
+                    .p2p_service
+                    .requests
+                    .send(p2p::Request::Subscribe(announcement.clone()));
+                self.editor
+                    .shared_files
+                    .insert(announcement.id, announcement);
+                self.editor.set_status(status);
+            }
+            p2p::Event::FileConnected(id) => {
+                // Someone joined the file's topic, so they opened the file and
+                // wait for its contents. Gossip can't send to a single peer, so
+                // this reaches everyone in the topic, and everyone who has the
+                // file answers. Receivers only take the first snapshot.
+                let Some(doc) = self
+                    .editor
+                    .documents()
+                    .find(|doc| doc.shared_id() == Some(id))
+                else {
+                    return;
+                };
+                let Some(replica) = &doc.crdt else {
+                    return;
+                };
+
+                let message = FileMessage::Snapshot {
+                    text: doc.text().to_string(),
+                    replica: replica.encode(),
+                };
+                let _ = self
+                    .editor
+                    .p2p_service
+                    .requests
+                    .send(p2p::Request::Broadcast(id, message));
+            }
+            p2p::Event::File(id, FileMessage::Snapshot { text, replica }) => {
+                // Snapshots reach everyone in the topic, so ignore those for
+                // files we already have open.
+                if self
+                    .editor
+                    .documents()
+                    .any(|doc| doc.shared_id() == Some(id))
+                {
+                    return;
+                }
+                let Some(announcement) = self.editor.shared_files.get(&id) else {
+                    return;
+                };
+
+                let crdt = match Replica::decode(
+                    id,
+                    announcement.owner,
+                    announcement.path.clone(),
+                    replica_id(),
+                    &replica,
+                ) {
+                    Ok(crdt) => crdt,
+                    Err(err) => {
+                        self.editor
+                            .set_error(format!("failed to open shared buffer: {err:#}"));
+                        return;
+                    }
+                };
+
+                let doc_id = self.editor.new_file_from_string(Action::Load, &text);
+                doc_mut!(self.editor, &doc_id).crdt = Some(crdt);
+            }
+            p2p::Event::File(id, FileMessage::Edit(op)) => {
+                let view_id = self
+                    .editor
+                    .tree
+                    .traverse()
+                    .find(|(_, view)| {
+                        self.editor
+                            .documents
+                            .get(&view.doc)
+                            .and_then(Document::shared_id)
+                            == Some(id)
+                    })
+                    .map_or(self.editor.tree.focus, |(view_id, _)| view_id);
+
+                let Some(doc) = self
+                    .editor
+                    .documents
+                    .values_mut()
+                    .find(|doc| doc.shared_id() == Some(id))
+                else {
+                    return;
+                };
+
+                // apply reads the document's selection for view_id, which a
+                // buffer that view has never displayed does not have yet.
+                doc.ensure_view_init(view_id);
+
+                let Some(mut crdt) = doc.crdt.take() else {
+                    return;
+                };
+                if let Some(transaction) = crdt.from_remote(doc.text(), &op) {
+                    doc.apply(&transaction, view_id);
+                }
+                doc.crdt = Some(crdt);
+            }
+            // Our edits to the file no longer reach anyone, so stop treating
+            // it as shared rather than let it silently drift apart.
+            p2p::Event::FileLeft(id) => {
+                for doc in self.editor.documents_mut() {
+                    if doc.shared_id() == Some(id) {
+                        doc.crdt = None;
                     }
                 }
             }
-            p2p::Event::Message(message) => match message {
-                Message::Share {
-                    id,
-                    owner,
-                    path,
-                    text,
-                    replica,
-                } => {
-                    if self
-                        .editor
-                        .documents()
-                        .any(|doc| doc.shared_id() == Some(id))
-                    {
-                        return;
-                    }
-
-                    let status = match &path {
-                        Some(path) => format!("{} shared {}", owner.fmt_short(), path.display()),
-                        None => {
-                            format!("{} shared a buffer ({})", owner.fmt_short(), id.fmt_short())
-                        }
-                    };
-
-                    let crdt = match Replica::decode(id, owner, path, replica_id(), &replica) {
-                        Ok(crdt) => crdt,
-                        Err(err) => {
-                            self.editor
-                                .set_error(format!("failed to join shared buffer: {err:#}"));
-                            return;
-                        }
-                    };
-
-                    let doc_id = self.editor.new_file_from_string(Action::Load, &text);
-                    doc_mut!(self.editor, &doc_id).crdt = Some(crdt);
-
-                    self.editor.set_status(status);
-                }
-
-                Message::Edit { id, op } => {
-                    let view_id = self
-                        .editor
-                        .tree
-                        .traverse()
-                        .find(|(_, view)| {
-                            self.editor
-                                .documents
-                                .get(&view.doc)
-                                .and_then(Document::shared_id)
-                                == Some(id)
-                        })
-                        .map_or(self.editor.tree.focus, |(view_id, _)| view_id);
-
-                    let Some(doc) = self
-                        .editor
-                        .documents
-                        .values_mut()
-                        .find(|doc| doc.shared_id() == Some(id))
-                    else {
-                        return;
-                    };
-
-                    // apply reads the document's selection for view_id, which a
-                    // buffer that view has never displayed does not have yet.
-                    doc.ensure_view_init(view_id);
-
-                    let Some(mut crdt) = doc.crdt.take() else {
-                        return;
-                    };
-                    if let Some(transaction) = crdt.from_remote(doc.text(), &op) {
-                        doc.apply(&transaction, view_id);
-                    }
-                    doc.crdt = Some(crdt);
-                }
-            },
             // Same as :session-close, but the session ended on its own.
-            // Without this, buffers would look shared while their edits
-            // reach nobody.
             p2p::Event::Left => {
+                self.editor.shared_files.clear();
                 for doc in self.editor.documents_mut() {
                     doc.crdt = None;
                 }

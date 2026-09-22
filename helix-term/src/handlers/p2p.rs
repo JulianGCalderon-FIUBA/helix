@@ -1,7 +1,7 @@
 use helix_event::register_hook;
 use helix_view::{
     events::DocumentDidChange,
-    p2p::{self, proto::Message},
+    p2p::{self, proto::FileMessage},
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -16,7 +16,7 @@ pub fn register_hooks(requests: UnboundedSender<p2p::Request>) {
 
         let id = replica.shared_id();
         for op in replica.from_local(event.changes) {
-            let _ = requests.send(p2p::Request::Broadcast(Message::Edit { id, op }));
+            let _ = requests.send(p2p::Request::Broadcast(id, FileMessage::Edit(op)));
         }
 
         Ok(())

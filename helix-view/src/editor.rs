@@ -46,6 +46,7 @@ use anyhow::{anyhow, bail, Error};
 pub use helix_core::diagnostic::Severity;
 use helix_core::{
     auto_pairs::AutoPairs,
+    crdt::SharedId,
     diagnostic::DiagnosticProvider,
     syntax::{
         self,
@@ -1345,6 +1346,8 @@ pub struct Editor {
     pub cursor_cache: CursorCache,
     pub workspace_trust: WorkspaceTrust,
     pub p2p_service: p2p::Service,
+    /// Every file announced in the current session, open or not.
+    pub shared_files: HashMap<SharedId, p2p::proto::Announcement>,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1474,6 +1477,7 @@ impl Editor {
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
             workspace_trust,
             p2p_service,
+            shared_files: HashMap::new(),
         }
     }
 

@@ -5,28 +5,48 @@ use helix_core::crdt::{EndpointId, RemoteOperation, SharedId};
 use iroh::EndpointAddr;
 use iroh_gossip::TopicId;
 use iroh_tickets::{ParseError, Ticket};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
+/// A file shared in the session, and the topic its edits travel on.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Message {
-    Share {
-        id: SharedId,
-        owner: EndpointId,
-        path: Option<PathBuf>,
-        text: String,
-        replica: Vec<u8>,
-    },
-    Edit {
-        id: SharedId,
-        op: RemoteOperation,
-    },
+pub struct Announcement {
+    pub id: SharedId,
+    pub topic: TopicId,
+    pub owner: EndpointId,
+    pub path: Option<PathBuf>,
 }
 
-pub fn encode(message: &Message) -> Result<Vec<u8>> {
+impl Announcement {
+    /// Announce a file on a topic of its own. The topic is random so that
+    /// nobody outside the session can guess it.
+    pub fn new(id: SharedId, owner: EndpointId, path: Option<PathBuf>) -> Self {
+        Self {
+            id,
+            topic: TopicId::from_bytes(rand::random()),
+            owner,
+            path,
+        }
+    }
+}
+
+/// Sent on the session topic.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SessionMessage {
+    Announce(Announcement),
+}
+
+/// Sent on a file's topic, which already identifies the file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FileMessage {
+    Snapshot { text: String, replica: Vec<u8> },
+    Edit(RemoteOperation),
+}
+
+pub fn encode<T: Serialize>(message: &T) -> Result<Vec<u8>> {
     Ok(postcard::to_stdvec(message)?)
 }
 
-pub fn decode(body: &[u8]) -> Result<Message> {
+pub fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T> {
     Ok(postcard::from_bytes(body)?)
 }
 
