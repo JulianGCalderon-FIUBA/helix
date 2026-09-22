@@ -3,7 +3,8 @@ use futures_util::Stream;
 use helix_core::{
     crdt::{replica_id, Replica},
     diagnostic::Severity,
-    pos_at_coords, syntax, Range, Selection,
+    history::History,
+    pos_at_coords, syntax, Range, Selection, Transaction,
 };
 use helix_lsp::{
     lsp::{self, notification::Notification},
@@ -36,6 +37,7 @@ use crate::{
 
 use log::{debug, error, info, warn};
 use std::{
+    cell::Cell,
     io::{stdin, IsTerminal},
     path::Path,
     sync::Arc,
@@ -1272,7 +1274,7 @@ impl Application {
             p2p::Event::File(id, FileMessage::Snapshot { text, replica }) => {
                 // Snapshots reach everyone in the topic, so only take the
                 // first one for a file we asked for.
-                let Some(action) = self.editor.p2p_service.pending.remove(&id) else {
+                let Some(doc_id) = self.editor.p2p_service.pending.remove(&id) else {
                     return;
                 };
                 let Some(announcement) = self.editor.p2p_service.files.get(&id) else {
@@ -1294,8 +1296,41 @@ impl Application {
                     }
                 };
 
-                let doc_id = self.editor.new_file_from_string(action, &text);
-                doc_mut!(self.editor, &doc_id).crdt = Some(crdt);
+                let view_id = self
+                    .editor
+                    .tree
+                    .views()
+                    .find(|(view, _)| view.doc == doc_id)
+                    .map_or(self.editor.tree.focus, |(view, _)| view.id);
+                let Some(doc) = self.editor.documents.get_mut(&doc_id) else {
+                    // The buffer was closed while waiting. It had no replica
+                    // yet, so closing it didn't leave the file's topic.
+                    let _ = self
+                        .editor
+                        .p2p_service
+                        .requests
+                        .send(p2p::Request::Unsubscribe(id));
+                    return;
+                };
+
+                // Replace whatever the buffer holds, as it only ever held a
+                // placeholder. The replica is attached afterwards, so this
+                // change isn't sent to the others as an edit of our own.
+                doc.ensure_view_init(view_id);
+                let transaction = Transaction::change(
+                    doc.text(),
+                    [(0, doc.text().len_chars(), Some(text.into()))].into_iter(),
+                );
+                doc.apply(&transaction, view_id);
+                doc.set_selection(view_id, Selection::point(0));
+
+                // Start the history from the snapshot. Otherwise the next undo
+                // would take the snapshot with it, emptying the buffer, and
+                // send that to everyone as a deletion of the whole file.
+                doc.append_changes_to_history(self.editor.tree.get_mut(view_id));
+                doc.history = Cell::new(History::default());
+
+                doc.crdt = Some(crdt);
             }
             p2p::Event::File(id, FileMessage::Edit(op)) => {
                 let view_id = self

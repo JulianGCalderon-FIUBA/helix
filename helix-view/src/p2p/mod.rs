@@ -17,7 +17,7 @@ use n0_future::StreamExt;
 use tokio::sync::mpsc::{unbounded_channel, Sender, UnboundedSender};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamMap};
 
-use crate::editor::Action;
+use crate::DocumentId;
 use proto::{Announcement, FileMessage, SessionMessage, SessionTicket};
 
 /// Gossip defaults to 4 KiB, and a Snapshot carries a whole buffer.
@@ -60,9 +60,9 @@ pub struct Service {
     pub requests: UnboundedSender<Request>,
     /// Every file announced in the current session, open or not.
     pub files: HashMap<SharedId, Announcement>,
-    /// Files we subscribed to and are waiting on a snapshot of,
-    /// with how to open each once it arrives.
-    pub pending: HashMap<SharedId, Action>,
+    /// Files we subscribed to and are waiting on a snapshot of, with the
+    /// empty buffer that will hold each.
+    pub pending: HashMap<SharedId, DocumentId>,
 }
 
 impl Service {
