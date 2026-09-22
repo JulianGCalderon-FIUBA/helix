@@ -1344,7 +1344,7 @@ pub struct Editor {
     pub mouse_down_range: Option<Range>,
     pub cursor_cache: CursorCache,
     pub workspace_trust: WorkspaceTrust,
-    pub p2p_service: p2p::Service,
+    pub p2p_service: p2p::net::Service,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1355,7 +1355,7 @@ pub enum EditorEvent {
     ConfigEvent(ConfigEvent),
     LanguageServerMessage((LanguageServerId, Call)),
     DebuggerEvent((DebugAdapterId, dap::Payload)),
-    P2pEvent(p2p::Event),
+    P2pEvent(p2p::net::Event),
     IdleTimer,
     Redraw,
 }
@@ -1425,7 +1425,7 @@ impl Editor {
         let conf = config.load();
         let auto_pairs = (&conf.auto_pairs).into();
 
-        let p2p_service = p2p::Service::new();
+        let p2p_service = p2p::net::Service::new();
 
         // HAXX: offset the render area height by 1 to account for prompt/commandline
         area.height -= 1;

@@ -2,9 +2,6 @@ use std::path::PathBuf;
 
 use super::crdt::{EndpointId, RemoteOperation, SharedId};
 use anyhow::Result;
-use iroh::EndpointAddr;
-use iroh_gossip::TopicId;
-use iroh_tickets::{ParseError, Ticket};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,22 +25,4 @@ pub fn encode(message: &Message) -> Result<Vec<u8>> {
 
 pub fn decode(body: &[u8]) -> Result<Message> {
     Ok(postcard::from_bytes(body)?)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionTicket {
-    pub topic: TopicId,
-    pub addr: EndpointAddr,
-}
-
-impl Ticket for SessionTicket {
-    const KIND: &'static str = "helix";
-
-    fn encode_bytes(&self) -> Vec<u8> {
-        postcard::to_stdvec(self).expect("ticket should serialize")
-    }
-
-    fn decode_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
-        Ok(postcard::from_bytes(bytes)?)
-    }
 }

@@ -2978,7 +2978,7 @@ fn session_new(
     cx.editor
         .p2p_service
         .requests
-        .send(p2p::Request::Ticket(tx))
+        .send(p2p::net::Request::Ticket(tx))
         .expect("p2p service should be running");
     cx.jobs.callback(async move {
         let ticket = rx.recv().await.expect("ticket should be returned");
@@ -3012,7 +3012,7 @@ fn session_join(
     cx.editor
         .p2p_service
         .requests
-        .send(p2p::Request::Join(ticket))
+        .send(p2p::net::Request::Join(ticket))
         .expect("p2p service should be running");
     Ok(())
 }
@@ -3050,7 +3050,7 @@ fn session_share(
     cx.editor
         .p2p_service
         .requests
-        .send(p2p::Request::Broadcast(message))
+        .send(p2p::net::Request::Broadcast(message))
         .expect("p2p service should be running");
     Ok(())
 }
@@ -3092,7 +3092,7 @@ fn session_close(
     cx.editor
         .p2p_service
         .requests
-        .send(p2p::Request::Close)
+        .send(p2p::net::Request::Close)
         .expect("p2p service should be running");
     Ok(())
 }

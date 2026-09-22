@@ -1208,9 +1208,9 @@ impl Application {
         }
     }
 
-    pub async fn handle_p2p_event(&mut self, event: p2p::Event) {
+    pub async fn handle_p2p_event(&mut self, event: p2p::net::Event) {
         match event {
-            p2p::Event::Connected(peer) => {
+            p2p::net::Event::Connected(peer) => {
                 self.editor
                     .set_status(format!("connected with {}", peer.fmt_short()));
 
@@ -1228,11 +1228,11 @@ impl Application {
                             .editor
                             .p2p_service
                             .requests
-                            .send(p2p::Request::Broadcast(message));
+                            .send(p2p::net::Request::Broadcast(message));
                     }
                 }
             }
-            p2p::Event::Message(message) => match message {
+            p2p::net::Event::Message(message) => match message {
                 Message::Share {
                     id,
                     owner,
@@ -1306,7 +1306,7 @@ impl Application {
                     doc.crdt = Some(crdt);
                 }
             },
-            p2p::Event::Error(err) => {
+            p2p::net::Event::Error(err) => {
                 self.editor.set_error(err);
             }
         }
