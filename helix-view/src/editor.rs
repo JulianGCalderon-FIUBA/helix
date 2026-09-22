@@ -1348,6 +1348,9 @@ pub struct Editor {
     pub p2p_service: p2p::Service,
     /// Every file announced in the current session, open or not.
     pub shared_files: HashMap<SharedId, p2p::proto::Announcement>,
+    /// Files we subscribed to and are waiting on a snapshot of,
+    /// with how to open each once it arrives.
+    pub pending_files: HashMap<SharedId, Action>,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1478,6 +1481,7 @@ impl Editor {
             workspace_trust,
             p2p_service,
             shared_files: HashMap::new(),
+            pending_files: HashMap::new(),
         }
     }
 

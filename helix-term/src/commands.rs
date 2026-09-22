@@ -24,7 +24,6 @@ use helix_core::{
     chars::char_is_word,
     command_line::{self, Args},
     comment,
-    crdt::{EndpointId, SharedId},
     doc_formatter::TextFormat,
     encoding, find_workspace,
     graphemes::{self, next_grapheme_boundary},
@@ -52,6 +51,7 @@ use helix_view::{
     info::Info,
     input::KeyEvent,
     keyboard::KeyCode,
+    p2p::{self, proto::Announcement},
     theme::Style,
     tree,
     view::View,
@@ -3400,37 +3400,35 @@ fn buffer_picker(cx: &mut Context) {
 /// Opens a picker of every buffer shared in the collaborative session
 fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
     struct SessionFileMeta {
-        id: DocumentId,
-        owner: EndpointId,
-        path: Option<PathBuf>,
-        shared_id: SharedId,
+        /// The buffer, if we have the file open.
+        doc: Option<DocumentId>,
+        announcement: Announcement,
     }
 
     let items = editor
-        .documents()
-        .filter_map(|doc| {
-            let replica = doc.crdt.as_ref()?;
-            Some(SessionFileMeta {
-                id: doc.id(),
-                owner: replica.owner(),
-                path: replica.path().map(ToOwned::to_owned),
-                shared_id: replica.shared_id(),
-            })
+        .shared_files
+        .values()
+        .map(|announcement| SessionFileMeta {
+            doc: editor
+                .documents()
+                .find(|doc| doc.shared_id() == Some(announcement.id))
+                .map(Document::id),
+            announcement: announcement.clone(),
         })
         .collect::<Vec<_>>();
 
     let columns = [
         PickerColumn::new("owner", |meta: &SessionFileMeta, _| {
-            meta.owner.fmt_short().to_string().into()
+            meta.announcement.owner.fmt_short().to_string().into()
         }),
         PickerColumn::new(
             "path",
             |meta: &SessionFileMeta, config: &PathStyleConfig| {
-                config.stylize(meta.path.as_deref(), None)
+                config.stylize(meta.announcement.path.as_deref(), None)
             },
         ),
         PickerColumn::new("id", |meta: &SessionFileMeta, _| {
-            meta.shared_id.fmt_short().into()
+            meta.announcement.id.fmt_short().into()
         }),
     ];
 
@@ -3440,16 +3438,31 @@ fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
         items,
         PathStyleConfig::new(&editor.theme),
         |cx, meta, action| {
-            cx.editor.switch(meta.id, action);
+            if let Some(doc) = meta.doc {
+                cx.editor.switch(doc, action);
+                return;
+            }
+
+            // The buffer opens once someone in the file's topic sends us
+            // its contents.
+            let id = meta.announcement.id;
+            if cx.editor.pending_files.insert(id, action).is_none() {
+                cx.editor
+                    .p2p_service
+                    .requests
+                    .send(p2p::Request::Subscribe(meta.announcement.clone()))
+                    .expect("p2p service should be running");
+            }
+            cx.editor.set_status(format!("opening {}", id.fmt_short()));
         },
     )
     .with_preview(|editor, meta| {
-        let doc = &editor.documents.get(&meta.id)?;
+        let doc = editor.documents.get(&meta.doc?)?;
         let lines = doc.selections().values().next().map(|selection| {
             let cursor_line = selection.primary().cursor_line(doc.text().slice(..));
             (cursor_line, cursor_line)
         });
-        Some((meta.id.into(), lines))
+        Some((doc.id().into(), lines))
     });
     compositor.push(Box::new(overlaid(picker)));
 }

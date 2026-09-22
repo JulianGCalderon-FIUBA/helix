@@ -14,7 +14,7 @@ use helix_stdx::path::get_relative_path;
 use helix_view::{
     align_view,
     document::{Document, DocumentOpenError, DocumentSavedEventResult},
-    editor::{Action, ConfigEvent, EditorEvent},
+    editor::{ConfigEvent, EditorEvent},
     graphics::Rect,
     p2p::{self, proto::FileMessage},
     theme,
@@ -1237,13 +1237,6 @@ impl Application {
                     Some(path) => format!("{owner} shared {}", path.display()),
                     None => format!("{owner} shared a buffer ({})", announcement.id.fmt_short()),
                 };
-                // Join every shared file, which opens it once its contents
-                // arrive, as sharing did before files had topics of their own.
-                let _ = self
-                    .editor
-                    .p2p_service
-                    .requests
-                    .send(p2p::Request::Subscribe(announcement.clone()));
                 self.editor
                     .shared_files
                     .insert(announcement.id, announcement);
@@ -1276,15 +1269,11 @@ impl Application {
                     .send(p2p::Request::Broadcast(id, message));
             }
             p2p::Event::File(id, FileMessage::Snapshot { text, replica }) => {
-                // Snapshots reach everyone in the topic, so ignore those for
-                // files we already have open.
-                if self
-                    .editor
-                    .documents()
-                    .any(|doc| doc.shared_id() == Some(id))
-                {
+                // Snapshots reach everyone in the topic, so only take the
+                // first one for a file we asked for.
+                let Some(action) = self.editor.pending_files.remove(&id) else {
                     return;
-                }
+                };
                 let Some(announcement) = self.editor.shared_files.get(&id) else {
                     return;
                 };
@@ -1304,7 +1293,7 @@ impl Application {
                     }
                 };
 
-                let doc_id = self.editor.new_file_from_string(Action::Load, &text);
+                let doc_id = self.editor.new_file_from_string(action, &text);
                 doc_mut!(self.editor, &doc_id).crdt = Some(crdt);
             }
             p2p::Event::File(id, FileMessage::Edit(op)) => {
@@ -1345,6 +1334,7 @@ impl Application {
             // Our edits to the file no longer reach anyone, so stop treating
             // it as shared rather than let it silently drift apart.
             p2p::Event::FileLeft(id) => {
+                self.editor.pending_files.remove(&id);
                 for doc in self.editor.documents_mut() {
                     if doc.shared_id() == Some(id) {
                         doc.crdt = None;
@@ -1354,6 +1344,7 @@ impl Application {
             // Same as :session-close, but the session ended on its own.
             p2p::Event::Left => {
                 self.editor.shared_files.clear();
+                self.editor.pending_files.clear();
                 for doc in self.editor.documents_mut() {
                     doc.crdt = None;
                 }

@@ -1,6 +1,6 @@
 use helix_event::register_hook;
 use helix_view::{
-    events::DocumentDidChange,
+    events::{DocumentDidChange, DocumentDidClose},
     p2p::{self, proto::FileMessage},
 };
 use tokio::sync::mpsc::UnboundedSender;
@@ -19,6 +19,19 @@ pub fn register_hooks(requests: UnboundedSender<p2p::Request>) {
             let _ = requests.send(p2p::Request::Broadcast(id, FileMessage::Edit(op)));
         }
 
+        Ok(())
+    });
+
+    // Once the buffer is gone there is nothing to apply the file's edits to,
+    // so leave its topic. Picking the file again rejoins it.
+    register_hook!(move |event: &mut DocumentDidClose<'_>| {
+        if let Some(id) = event.doc.shared_id() {
+            let _ = event
+                .editor
+                .p2p_service
+                .requests
+                .send(p2p::Request::Unsubscribe(id));
+        }
         Ok(())
     });
 }

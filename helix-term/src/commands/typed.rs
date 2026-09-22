@@ -3095,6 +3095,7 @@ fn session_close(
     }
     // The files were announced in the session we leave.
     cx.editor.shared_files.clear();
+    cx.editor.pending_files.clear();
 
     cx.editor
         .p2p_service
