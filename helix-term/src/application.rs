@@ -9,16 +9,10 @@ use helix_lsp::{
 use helix_stdx::path::get_relative_path;
 use helix_view::{
     align_view,
-    document::{Document, DocumentOpenError, DocumentSavedEventResult},
-    editor::{Action, ConfigEvent, EditorEvent},
+    document::{DocumentOpenError, DocumentSavedEventResult},
+    editor::{ConfigEvent, EditorEvent},
     graphics::Rect,
-    p2p::{
-        self,
-        crdt::Replica,
-        session::Shared,
-        wire::{self, Message},
-    },
-    theme,
+    p2p, theme,
     tree::Layout,
     Align, Editor,
 };
@@ -137,7 +131,7 @@ impl Application {
             handlers,
             workspace_trust,
         );
-        handlers::p2p::register_hooks(editor.p2p.clone());
+        p2p::session::register_hooks(editor.p2p.clone());
         Self::load_configured_theme(&mut editor, &config.load(), &mut terminal, theme_mode);
 
         let keys = Box::new(Map::new(Arc::clone(&config), |config: &Config| {
@@ -688,7 +682,7 @@ impl Application {
                 }
             }
             EditorEvent::P2pEvent(event) => {
-                self.handle_p2p_event(event).await;
+                self.editor.handle_p2p_event(event);
                 helix_event::request_redraw();
             }
             EditorEvent::Redraw => {
@@ -1205,106 +1199,6 @@ impl Application {
                 lsp::MessageType::ERROR => self.editor.set_error(message),
                 lsp::MessageType::WARNING => self.editor.set_warning(message),
                 _ => self.editor.set_status(message),
-            }
-        }
-    }
-
-    pub async fn handle_p2p_event(&mut self, event: p2p::net::Event) {
-        match event {
-            p2p::net::Event::NeighborUp(peer) => {
-                self.editor
-                    .set_status(format!("connected with {}", peer.fmt_short()));
-
-                // Offer every shared buffer to late joiners.
-                for doc in self.editor.documents() {
-                    if let Some(shared) = &doc.shared {
-                        let message = shared.to_message(doc.text());
-                        self.editor.p2p.broadcast(wire::encode(&message));
-                    }
-                }
-            }
-            p2p::net::Event::Received(bytes) => match wire::decode(&bytes) {
-                Err(err) => self.editor.set_error(format!("bad message: {err:#}")),
-                Ok(Message::Share {
-                    id,
-                    owner,
-                    path,
-                    text,
-                    replica,
-                }) => {
-                    if self
-                        .editor
-                        .documents()
-                        .any(|doc| doc.shared_id() == Some(id))
-                    {
-                        return;
-                    }
-
-                    let status = match &path {
-                        Some(path) => format!("{} shared {}", owner.fmt_short(), path.display()),
-                        None => {
-                            format!("{} shared a buffer ({})", owner.fmt_short(), id.fmt_short())
-                        }
-                    };
-
-                    let replica = match Replica::decode(&replica) {
-                        Ok(replica) => replica,
-                        Err(err) => {
-                            self.editor
-                                .set_error(format!("failed to join shared buffer: {err:#}"));
-                            return;
-                        }
-                    };
-
-                    let doc_id = self.editor.new_file_from_string(Action::Load, &text);
-                    doc_mut!(self.editor, &doc_id).shared = Some(Shared {
-                        id,
-                        owner,
-                        path,
-                        replica,
-                    });
-
-                    self.editor.set_status(status);
-                }
-
-                Ok(Message::Edit { id, op }) => {
-                    let view_id = self
-                        .editor
-                        .tree
-                        .traverse()
-                        .find(|(_, view)| {
-                            self.editor
-                                .documents
-                                .get(&view.doc)
-                                .and_then(Document::shared_id)
-                                == Some(id)
-                        })
-                        .map_or(self.editor.tree.focus, |(view_id, _)| view_id);
-
-                    let Some(doc) = self
-                        .editor
-                        .documents
-                        .values_mut()
-                        .find(|doc| doc.shared_id() == Some(id))
-                    else {
-                        return;
-                    };
-
-                    // apply reads the document's selection for view_id, which a
-                    // buffer that view has never displayed does not have yet.
-                    doc.ensure_view_init(view_id);
-
-                    let Some(mut shared) = doc.shared.take() else {
-                        return;
-                    };
-                    if let Some(transaction) = shared.replica.from_remote(doc.text(), &op) {
-                        doc.apply(&transaction, view_id);
-                    }
-                    doc.shared = Some(shared);
-                }
-            },
-            p2p::net::Event::Error(err) => {
-                self.editor.set_error(err);
             }
         }
     }

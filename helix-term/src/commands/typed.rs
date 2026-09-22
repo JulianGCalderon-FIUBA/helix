@@ -14,8 +14,6 @@ use helix_stdx::path::home_dir;
 use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
 use helix_view::editor::{CloseError, ConfigEvent};
 use helix_view::expansion;
-use helix_view::p2p::session::Shared;
-use helix_view::p2p::wire;
 use serde_json::Value;
 use ui::completers::{self, Completer};
 
@@ -3016,23 +3014,8 @@ fn session_share(
         return Ok(());
     }
 
-    let owner = cx.editor.p2p.id();
-    let doc = doc_mut!(cx.editor);
-    ensure!(doc.shared.is_none(), "buffer is already shared");
-
-    // Peers see the path relative to the workspace,
-    // or in full when the file is outside of it.
-    let path = doc.path().map(|path| {
-        let (workspace, _) = helix_loader::find_workspace();
-        path.strip_prefix(&workspace).unwrap_or(path).to_path_buf()
-    });
-
-    let shared = Shared::new(owner, path, doc.text());
-    let message = shared.to_message(doc.text());
-    doc.shared = Some(shared);
-
-    cx.editor.p2p.broadcast(wire::encode(&message));
-    Ok(())
+    let doc_id = doc!(cx.editor).id();
+    cx.editor.share(doc_id)
 }
 
 fn session_files(
@@ -3064,12 +3047,7 @@ fn session_close(
         return Ok(());
     }
 
-    // Leaving drops every peer, so nothing is shared any more.
-    for doc in cx.editor.documents_mut() {
-        doc.shared = None;
-    }
-
-    cx.editor.p2p.close();
+    cx.editor.leave_session();
     Ok(())
 }
 
