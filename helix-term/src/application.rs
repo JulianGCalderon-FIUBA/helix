@@ -1,10 +1,6 @@
 use arc_swap::{access::Map, ArcSwap};
 use futures_util::Stream;
-use helix_core::{
-    crdt::{replica_id, Replica},
-    diagnostic::Severity,
-    pos_at_coords, syntax, Range, Selection,
-};
+use helix_core::{diagnostic::Severity, pos_at_coords, syntax, Range, Selection};
 use helix_lsp::{
     lsp::{self, notification::Notification},
     util::lsp_range_to_range,
@@ -16,7 +12,11 @@ use helix_view::{
     document::{Document, DocumentOpenError, DocumentSavedEventResult},
     editor::{Action, ConfigEvent, EditorEvent},
     graphics::Rect,
-    p2p::{self, proto::Message},
+    p2p::{
+        self,
+        crdt::{replica_id, Replica},
+        proto::Message,
+    },
     theme,
     tree::Layout,
     Align, Editor,

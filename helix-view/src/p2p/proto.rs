@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
+use super::crdt::{EndpointId, RemoteOperation, SharedId};
 use anyhow::Result;
-use helix_core::crdt::{EndpointId, RemoteOperation, SharedId};
 use iroh::EndpointAddr;
 use iroh_gossip::TopicId;
 use iroh_tickets::{ParseError, Ticket};

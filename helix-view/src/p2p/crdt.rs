@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use cola::{EncodedReplica, Insertion, ReplicaId};
-pub use iroh_base::EndpointId;
+pub use iroh::EndpointId;
 use serde::{Deserialize, Serialize};
 
-use crate::{transaction::Operation, ChangeSet, Rope, Transaction};
+use helix_core::{ChangeSet, Operation, Rope, Transaction};
 
 /// Identifies a single document across all peers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

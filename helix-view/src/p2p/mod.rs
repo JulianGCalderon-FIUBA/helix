@@ -1,3 +1,4 @@
+pub mod crdt;
 pub mod proto;
 
 use anyhow::{ensure, Result};

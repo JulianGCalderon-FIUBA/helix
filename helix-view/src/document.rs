@@ -34,7 +34,6 @@ use std::sync::{Arc, Weak};
 use std::time::SystemTime;
 
 use helix_core::{
-    crdt::{Replica, SharedId},
     editor_config::EditorConfig,
     encoding,
     history::{History, State, UndoKind},
@@ -48,6 +47,7 @@ use crate::{
     editor::Config,
     events::{DocumentDidChange, SelectionDidChange},
     expansion,
+    p2p::crdt::{Replica, SharedId},
     view::ViewPosition,
     DocumentId, Editor, Theme, View, ViewId,
 };

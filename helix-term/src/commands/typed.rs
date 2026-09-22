@@ -7,13 +7,13 @@ use crate::job::Job;
 use super::*;
 
 use helix_core::command_line::{Args, Flag, Signature, Token, TokenKind};
-use helix_core::crdt::{replica_id, Replica};
 use helix_core::fuzzy::fuzzy_match;
 use helix_core::indent::MAX_INDENT;
 use helix_core::line_ending;
 use helix_stdx::path::home_dir;
 use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
 use helix_view::editor::{CloseError, ConfigEvent};
+use helix_view::p2p::crdt::{replica_id, Replica};
 use helix_view::p2p::proto::Message;
 use helix_view::{expansion, p2p};
 use serde_json::Value;
