@@ -5,7 +5,7 @@
 //! rules of the protocol live here, in one place, so that the actor's
 //! topics, the service's files and each buffer's replica stay in agreement.
 
-use std::cell::Cell;
+use std::{cell::Cell, collections::HashMap};
 
 use anyhow::{ensure, Result};
 use helix_core::{
@@ -18,7 +18,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::{
     proto::{Announcement, FileMessage},
-    Event, Request,
+    Event, Request, Transport,
 };
 use crate::{
     editor::Action,
@@ -26,9 +26,34 @@ use crate::{
     Document, DocumentId, Editor, ViewId,
 };
 
+/// The editor's side of the session, next to the handle to its transport.
+///
+/// The files are kept here and not in the actor because the editor reads
+/// them on its own thread, like the picker listing them, and couldn't wait
+/// on the actor for it.
+#[derive(Default)]
+pub struct Service {
+    pub transport: Transport,
+    /// Every file announced in the current session, open or not.
+    pub files: HashMap<SharedId, Announcement>,
+    /// Files we subscribed to and are waiting on a snapshot of, with the
+    /// empty buffer that will hold each.
+    pub pending: HashMap<SharedId, DocumentId>,
+}
+
+impl Service {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn send(&self, request: Request) {
+        self.transport.send(request);
+    }
+}
+
 /// Share the focused buffer with the session.
 pub fn share(editor: &mut Editor) -> Result<()> {
-    let owner = editor.p2p_service.id;
+    let owner = editor.p2p_service.transport.id;
     let doc = doc_mut!(editor);
     ensure!(doc.crdt.is_none(), "buffer is already shared");
 

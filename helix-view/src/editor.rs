@@ -2503,7 +2503,7 @@ impl Editor {
                 Some(event) = self.debug_adapters.incoming.next() => {
                     return EditorEvent::DebuggerEvent(event)
                 }
-                Some(event) = self.p2p_service.events.next() => {
+                Some(event) = self.p2p_service.transport.events.next() => {
                     return EditorEvent::P2pEvent(event)
                 }
 
