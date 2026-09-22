@@ -14,7 +14,7 @@ use helix_stdx::path::home_dir;
 use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
 use helix_view::editor::{CloseError, ConfigEvent};
 use helix_view::p2p::crdt::{replica_id, Replica};
-use helix_view::p2p::proto::Message;
+use helix_view::p2p::wire::Message;
 use helix_view::{expansion, p2p};
 use serde_json::Value;
 use tokio::sync::mpsc::channel;

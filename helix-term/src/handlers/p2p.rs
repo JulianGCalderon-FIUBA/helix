@@ -1,7 +1,7 @@
 use helix_event::register_hook;
 use helix_view::{
     events::DocumentDidChange,
-    p2p::{self, proto::Message},
+    p2p::{self, wire::Message},
 };
 use tokio::sync::mpsc::UnboundedSender;
 

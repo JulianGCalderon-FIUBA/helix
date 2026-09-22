@@ -1,5 +1,5 @@
 pub mod crdt;
-pub mod proto;
+pub mod wire;
 
 use anyhow::{ensure, Result};
 use iroh::{
@@ -15,7 +15,7 @@ use n0_future::StreamExt;
 use tokio::sync::mpsc::{unbounded_channel, Sender, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use proto::{Message, SessionTicket};
+use wire::{Message, SessionTicket};
 
 /// Gossip defaults to 4 KiB, and a Share carries a whole buffer.
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
@@ -191,7 +191,7 @@ impl Session {
 
         // Only best-effort delivery.
         subscription
-            .broadcast(proto::encode(&message)?.into())
+            .broadcast(wire::encode(&message)?.into())
             .await?;
         Ok(())
     }
@@ -216,7 +216,7 @@ impl Session {
             Some(Ok(GossipEvent::NeighborDown(id))) => {
                 log::info!("disconnected from {}", id.fmt_short());
             }
-            Some(Ok(GossipEvent::Received(message))) => match proto::decode(&message.content) {
+            Some(Ok(GossipEvent::Received(message))) => match wire::decode(&message.content) {
                 Ok(message) => {
                     let _ = self.events.send(Event::Message(message));
                 }

@@ -15,7 +15,7 @@ use helix_view::{
     p2p::{
         self,
         crdt::{replica_id, Replica},
-        proto::Message,
+        wire::Message,
     },
     theme,
     tree::Layout,
