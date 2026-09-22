@@ -244,7 +244,8 @@ impl Session {
         let me = self.endpoint.id();
         bootstrap.retain(|peer| *peer != me);
 
-        let subscription = self.gossip.subscribe(announcement.topic, bootstrap).await?;
+        let topic = TopicId::from_bytes(*announcement.id.as_bytes());
+        let subscription = self.gossip.subscribe(topic, bootstrap).await?;
         self.files.insert(announcement.id, subscription);
         Ok(())
     }

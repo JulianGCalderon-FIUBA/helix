@@ -3038,11 +3038,11 @@ fn session_share(
     });
 
     let replica = Replica::new(replica_id(), owner, path, doc.text());
-    let announcement = Announcement::new(
-        replica.shared_id(),
+    let announcement = Announcement {
+        id: replica.shared_id(),
         owner,
-        replica.path().map(ToOwned::to_owned),
-    );
+        path: replica.path().map(ToOwned::to_owned),
+    };
     doc.crdt = Some(replica);
     cx.editor
         .shared_files

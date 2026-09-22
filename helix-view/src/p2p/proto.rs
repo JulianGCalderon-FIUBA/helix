@@ -7,26 +7,13 @@ use iroh_gossip::TopicId;
 use iroh_tickets::{ParseError, Ticket};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-/// A file shared in the session, and the topic its edits travel on.
+/// A file shared in the session. Its edits travel on the topic of the
+/// same id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Announcement {
     pub id: SharedId,
-    pub topic: TopicId,
     pub owner: EndpointId,
     pub path: Option<PathBuf>,
-}
-
-impl Announcement {
-    /// Announce a file on a topic of its own. The topic is random so that
-    /// nobody outside the session can guess it.
-    pub fn new(id: SharedId, owner: EndpointId, path: Option<PathBuf>) -> Self {
-        Self {
-            id,
-            topic: TopicId::from_bytes(rand::random()),
-            owner,
-            path,
-        }
-    }
 }
 
 /// Sent on the session topic.

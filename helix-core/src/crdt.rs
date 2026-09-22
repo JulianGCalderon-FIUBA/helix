@@ -13,16 +13,26 @@ use serde::{Deserialize, Serialize};
 use crate::{transaction::Operation, ChangeSet, Rope, Transaction};
 
 /// Identifies a single document across all peers.
+///
+/// As many bytes as a gossip topic id, so that the document's topic can
+/// simply be its id. Being random, nobody outside the session can guess it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SharedId(u64);
+pub struct SharedId([u8; 32]);
 
 impl SharedId {
     pub fn random() -> Self {
         Self(rand::random())
     }
 
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
     pub fn fmt_short(&self) -> String {
-        format!("{:08x}", self.0 as u32)
+        self.0[..4]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 }
 
