@@ -1344,7 +1344,10 @@ pub struct Editor {
     pub mouse_down_range: Option<Range>,
     pub cursor_cache: CursorCache,
     pub workspace_trust: WorkspaceTrust,
+    /// Handle to the p2p node, started with the editor.
     pub p2p: p2p::net::Service,
+    /// Kept apart from `p2p` so the handle can be cloned into hooks, while
+    /// only `wait_event` polls the events.
     p2p_incoming: UnboundedReceiverStream<p2p::net::Event>,
 }
 
