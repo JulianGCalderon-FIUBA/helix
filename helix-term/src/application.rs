@@ -136,7 +136,7 @@ impl Application {
             handlers,
             workspace_trust,
         );
-        handlers::collab::register_hooks(editor.p2p_service.requests.clone());
+        handlers::p2p::register_hooks(editor.p2p_service.requests.clone());
         Self::load_configured_theme(&mut editor, &config.load(), &mut terminal, theme_mode);
 
         let keys = Box::new(Map::new(Arc::clone(&config), |config: &Config| {

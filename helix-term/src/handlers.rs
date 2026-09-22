@@ -17,12 +17,12 @@ use self::document_links::DocumentLinksHandler;
 
 mod auto_save;
 mod code_action_hint;
-pub mod collab;
 pub mod completion;
 pub mod diagnostics;
 mod document_colors;
 mod document_highlight;
 mod document_links;
+pub mod p2p;
 mod prompt;
 mod signature_help;
 mod snippet;
