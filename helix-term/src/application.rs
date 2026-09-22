@@ -1218,7 +1218,7 @@ impl Application {
                 // never learn about the files shared before it. Everyone
                 // announces every file it knows of instead, which is cheap
                 // since announcements carry no contents.
-                for announcement in self.editor.shared_files.values() {
+                for announcement in self.editor.p2p_service.files.values() {
                     let _ = self
                         .editor
                         .p2p_service
@@ -1228,7 +1228,7 @@ impl Application {
             }
             p2p::Event::Announced(announcement) => {
                 // Files are announced again whenever someone connects.
-                if self.editor.shared_files.contains_key(&announcement.id) {
+                if self.editor.p2p_service.files.contains_key(&announcement.id) {
                     return;
                 }
 
@@ -1238,7 +1238,8 @@ impl Application {
                     None => format!("{owner} shared a buffer ({})", announcement.id.fmt_short()),
                 };
                 self.editor
-                    .shared_files
+                    .p2p_service
+                    .files
                     .insert(announcement.id, announcement);
                 self.editor.set_status(status);
             }
@@ -1271,10 +1272,10 @@ impl Application {
             p2p::Event::File(id, FileMessage::Snapshot { text, replica }) => {
                 // Snapshots reach everyone in the topic, so only take the
                 // first one for a file we asked for.
-                let Some(action) = self.editor.pending_files.remove(&id) else {
+                let Some(action) = self.editor.p2p_service.pending.remove(&id) else {
                     return;
                 };
-                let Some(announcement) = self.editor.shared_files.get(&id) else {
+                let Some(announcement) = self.editor.p2p_service.files.get(&id) else {
                     return;
                 };
 
@@ -1334,7 +1335,7 @@ impl Application {
             // Our edits to the file no longer reach anyone, so stop treating
             // it as shared rather than let it silently drift apart.
             p2p::Event::FileLeft(id) => {
-                self.editor.pending_files.remove(&id);
+                self.editor.p2p_service.pending.remove(&id);
                 for doc in self.editor.documents_mut() {
                     if doc.shared_id() == Some(id) {
                         doc.crdt = None;
@@ -1343,8 +1344,8 @@ impl Application {
             }
             // Same as :session-close, but the session ended on its own.
             p2p::Event::Left => {
-                self.editor.shared_files.clear();
-                self.editor.pending_files.clear();
+                self.editor.p2p_service.files.clear();
+                self.editor.p2p_service.pending.clear();
                 for doc in self.editor.documents_mut() {
                     doc.crdt = None;
                 }

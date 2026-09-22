@@ -3045,7 +3045,8 @@ fn session_share(
     };
     doc.crdt = Some(replica);
     cx.editor
-        .shared_files
+        .p2p_service
+        .files
         .insert(announcement.id, announcement.clone());
 
     // Join the file's topic before announcing it, so whoever opens
@@ -3094,8 +3095,8 @@ fn session_close(
         doc.crdt = None;
     }
     // The files were announced in the session we leave.
-    cx.editor.shared_files.clear();
-    cx.editor.pending_files.clear();
+    cx.editor.p2p_service.files.clear();
+    cx.editor.p2p_service.pending.clear();
 
     cx.editor
         .p2p_service

@@ -3406,7 +3406,8 @@ fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
     }
 
     let items = editor
-        .shared_files
+        .p2p_service
+        .files
         .values()
         .map(|announcement| SessionFileMeta {
             doc: editor
@@ -3446,7 +3447,7 @@ fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
             // The buffer opens once someone in the file's topic sends us
             // its contents.
             let id = meta.announcement.id;
-            if cx.editor.pending_files.insert(id, action).is_none() {
+            if cx.editor.p2p_service.pending.insert(id, action).is_none() {
                 cx.editor
                     .p2p_service
                     .requests

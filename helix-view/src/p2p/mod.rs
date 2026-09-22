@@ -1,5 +1,7 @@
 pub mod proto;
 
+use std::collections::HashMap;
+
 use anyhow::{ensure, Result};
 use helix_core::crdt::SharedId;
 use iroh::{
@@ -15,6 +17,7 @@ use n0_future::StreamExt;
 use tokio::sync::mpsc::{unbounded_channel, Sender, UnboundedSender};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamMap};
 
+use crate::editor::Action;
 use proto::{Announcement, FileMessage, SessionMessage, SessionTicket};
 
 /// Gossip defaults to 4 KiB, and a Snapshot carries a whole buffer.
@@ -47,10 +50,19 @@ pub enum Request {
 }
 
 /// Handle to the actor task that owns the Session.
+///
+/// It also keeps the editor's side of the session. That lives here and not
+/// in the actor because the editor reads it on its own thread, like the
+/// picker listing the files, and couldn't wait on the actor for it.
 pub struct Service {
     pub id: EndpointId,
     pub events: UnboundedReceiverStream<Event>,
     pub requests: UnboundedSender<Request>,
+    /// Every file announced in the current session, open or not.
+    pub files: HashMap<SharedId, Announcement>,
+    /// Files we subscribed to and are waiting on a snapshot of,
+    /// with how to open each once it arrives.
+    pub pending: HashMap<SharedId, Action>,
 }
 
 impl Service {
@@ -96,6 +108,8 @@ impl Service {
             id,
             events: UnboundedReceiverStream::new(events_rx),
             requests: requests_tx,
+            files: HashMap::new(),
+            pending: HashMap::new(),
         }
     }
 }
