@@ -23,6 +23,8 @@ const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 pub enum Event {
     Connected(EndpointId),
     Message(Message),
+    /// We left the session on our own, so nothing is shared any more.
+    Left,
     Error(String),
 }
 
@@ -228,18 +230,18 @@ impl Session {
             // We lost some messages. The dropped edits are lost for good, so
             // leave instead of drifting apart unnoticed.
             Some(Ok(GossipEvent::Lagged)) => {
-                self.report("fell behind the session and left it".into());
-                self.close();
+                self.leave("fell behind the session and left it".into());
             }
-            Some(Err(err)) => {
-                self.report(format!("session failed: {:#}", err));
-                self.close();
-            }
-            None => {
-                self.report("left the session".into());
-                self.close();
-            }
+            Some(Err(err)) => self.leave(format!("session failed: {:#}", err)),
+            None => self.leave("left the session".into()),
         }
+    }
+
+    /// Leave the session on our own, and tell the editor.
+    fn leave(&mut self, error: String) {
+        self.report(error);
+        self.close();
+        let _ = self.events.send(Event::Left);
     }
 
     fn report(&self, error: String) {

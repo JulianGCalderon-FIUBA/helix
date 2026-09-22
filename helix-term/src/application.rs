@@ -1306,6 +1306,14 @@ impl Application {
                     doc.crdt = Some(crdt);
                 }
             },
+            // Same as :session-close, but the session ended on its own.
+            // Without this, buffers would look shared while their edits
+            // reach nobody.
+            p2p::Event::Left => {
+                for doc in self.editor.documents_mut() {
+                    doc.crdt = None;
+                }
+            }
             p2p::Event::Error(err) => {
                 self.editor.set_error(err);
             }
