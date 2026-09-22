@@ -2442,6 +2442,7 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "bitflags",
+ "bytes",
  "chardetng",
  "clipboard-win",
  "cola",

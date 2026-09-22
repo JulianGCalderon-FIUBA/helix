@@ -13,11 +13,10 @@ use helix_core::line_ending;
 use helix_stdx::path::home_dir;
 use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
 use helix_view::editor::{CloseError, ConfigEvent};
+use helix_view::expansion;
 use helix_view::p2p::crdt::{replica_id, Replica};
-use helix_view::p2p::wire::Message;
-use helix_view::{expansion, p2p};
+use helix_view::p2p::wire::{self, Message};
 use serde_json::Value;
-use tokio::sync::mpsc::channel;
 use ui::completers::{self, Completer};
 
 #[derive(Clone)]
@@ -2974,14 +2973,9 @@ fn session_new(
         return Ok(());
     }
 
-    let (tx, mut rx) = channel(1);
-    cx.editor
-        .p2p_service
-        .requests
-        .send(p2p::net::Request::Ticket(tx))
-        .expect("p2p service should be running");
+    let ticket = cx.editor.p2p.ticket();
     cx.jobs.callback(async move {
-        let ticket = rx.recv().await.expect("ticket should be returned");
+        let ticket = ticket.await;
         Ok(job::Callback::EditorCompositor(Box::new(
             move |editor: &mut Editor, _: &mut Compositor| {
                 let register = '+';
@@ -3009,11 +3003,7 @@ fn session_join(
         .first()
         .expect("command should have argument")
         .to_string();
-    cx.editor
-        .p2p_service
-        .requests
-        .send(p2p::net::Request::Join(ticket))
-        .expect("p2p service should be running");
+    cx.editor.p2p.join(ticket);
     Ok(())
 }
 
@@ -3026,7 +3016,7 @@ fn session_share(
         return Ok(());
     }
 
-    let owner = cx.editor.p2p_service.id;
+    let owner = cx.editor.p2p.id();
     let doc = doc_mut!(cx.editor);
     ensure!(doc.crdt.is_none(), "buffer is already shared");
 
@@ -3047,11 +3037,7 @@ fn session_share(
     };
     doc.crdt = Some(replica);
 
-    cx.editor
-        .p2p_service
-        .requests
-        .send(p2p::net::Request::Broadcast(message))
-        .expect("p2p service should be running");
+    cx.editor.p2p.broadcast(wire::encode(&message));
     Ok(())
 }
 
@@ -3089,11 +3075,7 @@ fn session_close(
         doc.crdt = None;
     }
 
-    cx.editor
-        .p2p_service
-        .requests
-        .send(p2p::net::Request::Close)
-        .expect("p2p service should be running");
+    cx.editor.p2p.close();
     Ok(())
 }
 

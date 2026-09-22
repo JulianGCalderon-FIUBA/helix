@@ -15,7 +15,7 @@ use helix_view::{
     p2p::{
         self,
         crdt::{replica_id, Replica},
-        wire::Message,
+        wire::{self, Message},
     },
     theme,
     tree::Layout,
@@ -136,7 +136,7 @@ impl Application {
             handlers,
             workspace_trust,
         );
-        handlers::p2p::register_hooks(editor.p2p_service.requests.clone());
+        handlers::p2p::register_hooks(editor.p2p.clone());
         Self::load_configured_theme(&mut editor, &config.load(), &mut terminal, theme_mode);
 
         let keys = Box::new(Map::new(Arc::clone(&config), |config: &Config| {
@@ -1210,7 +1210,7 @@ impl Application {
 
     pub async fn handle_p2p_event(&mut self, event: p2p::net::Event) {
         match event {
-            p2p::net::Event::Connected(peer) => {
+            p2p::net::Event::NeighborUp(peer) => {
                 self.editor
                     .set_status(format!("connected with {}", peer.fmt_short()));
 
@@ -1224,22 +1224,19 @@ impl Application {
                             text: doc.text().to_string(),
                             replica: replica.encode(),
                         };
-                        let _ = self
-                            .editor
-                            .p2p_service
-                            .requests
-                            .send(p2p::net::Request::Broadcast(message));
+                        self.editor.p2p.broadcast(wire::encode(&message));
                     }
                 }
             }
-            p2p::net::Event::Message(message) => match message {
-                Message::Share {
+            p2p::net::Event::Received(bytes) => match wire::decode(&bytes) {
+                Err(err) => self.editor.set_error(format!("bad message: {err:#}")),
+                Ok(Message::Share {
                     id,
                     owner,
                     path,
                     text,
                     replica,
-                } => {
+                }) => {
                     if self
                         .editor
                         .documents()
@@ -1270,7 +1267,7 @@ impl Application {
                     self.editor.set_status(status);
                 }
 
-                Message::Edit { id, op } => {
+                Ok(Message::Edit { id, op }) => {
                     let view_id = self
                         .editor
                         .tree

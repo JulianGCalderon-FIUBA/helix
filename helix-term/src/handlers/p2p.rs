@@ -1,11 +1,13 @@
 use helix_event::register_hook;
 use helix_view::{
     events::DocumentDidChange,
-    p2p::{self, wire::Message},
+    p2p::{
+        net::Service,
+        wire::{self, Message},
+    },
 };
-use tokio::sync::mpsc::UnboundedSender;
 
-pub fn register_hooks(requests: UnboundedSender<p2p::net::Request>) {
+pub fn register_hooks(p2p: Service) {
     register_hook!(move |event: &mut DocumentDidChange<'_>| {
         if event.ghost_transaction || event.remote_transaction {
             return Ok(());
@@ -16,7 +18,7 @@ pub fn register_hooks(requests: UnboundedSender<p2p::net::Request>) {
 
         let id = replica.shared_id();
         for op in replica.from_local(event.changes) {
-            let _ = requests.send(p2p::net::Request::Broadcast(Message::Edit { id, op }));
+            p2p.broadcast(wire::encode(&Message::Edit { id, op }));
         }
 
         Ok(())

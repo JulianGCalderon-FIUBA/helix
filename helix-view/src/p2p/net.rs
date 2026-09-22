@@ -1,4 +1,7 @@
+use std::future::Future;
+
 use anyhow::{ensure, Result};
+use bytes::Bytes;
 use iroh::{
     address_lookup::memory::MemoryLookup, endpoint::presets, protocol::Router, Endpoint,
     EndpointAddr, EndpointId, SecretKey,
@@ -9,40 +12,43 @@ use iroh_gossip::{
 };
 use iroh_tickets::{ParseError, Ticket};
 use n0_future::StreamExt;
-use tokio::sync::mpsc::{unbounded_channel, Sender, UnboundedSender};
-use tokio_stream::wrappers::UnboundedReceiverStream;
-
 use serde::{Deserialize, Serialize};
-
-use super::wire::{self, Message};
+use tokio::sync::{
+    mpsc::{unbounded_channel, UnboundedSender},
+    oneshot,
+};
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 /// Gossip defaults to 4 KiB, and a Share carries a whole buffer.
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum Event {
-    Connected(EndpointId),
-    Message(Message),
+    NeighborUp(EndpointId),
+    Received(Bytes),
     Error(String),
 }
 
 #[derive(Debug)]
-pub enum Request {
-    Ticket(Sender<String>),
+enum Request {
+    Ticket(oneshot::Sender<String>),
     Join(String),
     Close,
-    Broadcast(Message),
+    Broadcast(Bytes),
 }
 
 /// Handle to the actor task that owns the Node.
+///
+/// Cheap to clone, so hooks can keep their own copy to broadcast from.
+#[derive(Clone)]
 pub struct Service {
-    pub id: EndpointId,
-    pub events: UnboundedReceiverStream<Event>,
-    pub requests: UnboundedSender<Request>,
+    id: EndpointId,
+    requests: UnboundedSender<Request>,
 }
 
 impl Service {
-    pub fn new() -> Self {
+    /// Starts the node, returning a handle to it and the stream of its events.
+    pub fn new() -> (Self, UnboundedReceiverStream<Event>) {
         let (events_tx, events_rx) = unbounded_channel();
         let (requests_tx, mut requests_rx) = unbounded_channel();
 
@@ -80,17 +86,43 @@ impl Service {
             }
         });
 
-        Service {
+        let service = Service {
             id,
-            events: UnboundedReceiverStream::new(events_rx),
             requests: requests_tx,
-        }
+        };
+        (service, UnboundedReceiverStream::new(events_rx))
     }
-}
 
-impl Default for Service {
-    fn default() -> Self {
-        Self::new()
+    pub fn id(&self) -> EndpointId {
+        self.id
+    }
+
+    /// Resolves to a ticket into the current session, starting one if needed.
+    ///
+    /// The future does not borrow the service, so it can run as a job.
+    pub fn ticket(&self) -> impl Future<Output = String> + 'static {
+        let (tx, rx) = oneshot::channel();
+        self.send(Request::Ticket(tx));
+        async move { rx.await.expect("node should reply with a ticket") }
+    }
+
+    /// Failures come back as an [`Event::Error`].
+    pub fn join(&self, ticket: String) {
+        self.send(Request::Join(ticket));
+    }
+
+    pub fn close(&self) {
+        self.send(Request::Close);
+    }
+
+    pub fn broadcast(&self, message: Bytes) {
+        self.send(Request::Broadcast(message));
+    }
+
+    fn send(&self, request: Request) {
+        self.requests
+            .send(request)
+            .expect("p2p node should be running");
     }
 }
 
@@ -145,7 +177,7 @@ impl Node {
     async fn handle(&mut self, request: Request) {
         let result = match request {
             Request::Ticket(chan) => {
-                let _ = chan.send(self.ticket().await).await;
+                let _ = chan.send(self.ticket().await);
                 Ok(())
             }
             Request::Join(ticket) => self.join(&ticket).await,
@@ -202,15 +234,13 @@ impl Node {
         Ok(())
     }
 
-    async fn broadcast(&mut self, message: Message) -> Result<()> {
+    async fn broadcast(&mut self, message: Bytes) -> Result<()> {
         let Some((_, subscription)) = &mut self.topic else {
             return Ok(());
         };
 
         // Only best-effort delivery.
-        subscription
-            .broadcast(wire::encode(&message)?.into())
-            .await?;
+        subscription.broadcast(message).await?;
         Ok(())
     }
 
@@ -229,21 +259,14 @@ impl Node {
         match event {
             Some(Ok(GossipEvent::NeighborUp(id))) => {
                 log::info!("connected to {}", id.fmt_short());
-                let _ = self.events.send(Event::Connected(id));
+                let _ = self.events.send(Event::NeighborUp(id));
             }
             Some(Ok(GossipEvent::NeighborDown(id))) => {
                 log::info!("disconnected from {}", id.fmt_short());
             }
-            Some(Ok(GossipEvent::Received(message))) => match wire::decode(&message.content) {
-                Ok(message) => {
-                    let _ = self.events.send(Event::Message(message));
-                }
-                Err(err) => self.report(format!(
-                    "bad message from {}: {:#}",
-                    message.delivered_from.fmt_short(),
-                    err
-                )),
-            },
+            Some(Ok(GossipEvent::Received(message))) => {
+                let _ = self.events.send(Event::Received(message.content));
+            }
             // We lost some messages. The dropped edits are lost for good, so
             // leave instead of drifting apart unnoticed.
             Some(Ok(GossipEvent::Lagged)) => {
