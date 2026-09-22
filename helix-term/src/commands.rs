@@ -3405,27 +3405,13 @@ fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
         announcement: Announcement,
     }
 
-    let p2p = &editor.p2p_service;
-    let items = p2p
+    let items = editor
+        .p2p_service
         .files
         .values()
-        .map(|announcement| {
-            let id = announcement.id;
-            let open = editor
-                .documents()
-                .find(|doc| doc.shared_id() == Some(id))
-                .map(Document::id);
-            // A buffer still waiting on its contents counts as open too, unless
-            // it was closed in the meantime.
-            let pending = p2p
-                .pending
-                .get(&id)
-                .copied()
-                .filter(|doc| editor.documents.contains_key(doc));
-            SessionFileMeta {
-                doc: open.or(pending),
-                announcement: announcement.clone(),
-            }
+        .map(|announcement| SessionFileMeta {
+            doc: p2p::collab::buffer(editor, announcement.id),
+            announcement: announcement.clone(),
         })
         .collect::<Vec<_>>();
 
@@ -3449,26 +3435,7 @@ fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
         1,
         items,
         PathStyleConfig::new(&editor.theme),
-        |cx, meta, action| {
-            if let Some(doc) = meta.doc {
-                cx.editor.switch(doc, action);
-                return;
-            }
-
-            // Open the buffer right away, while the view the file was picked
-            // for is still the one in focus. It stays empty until someone in
-            // the file's topic sends us its contents.
-            let id = meta.announcement.id;
-            let doc = cx.editor.new_file(action);
-            cx.editor.p2p_service.pending.insert(id, doc);
-            // Subscribing twice is harmless, the service ignores it.
-            cx.editor
-                .p2p_service
-                .requests
-                .send(p2p::Request::Subscribe(meta.announcement.clone()))
-                .expect("p2p service should be running");
-            cx.editor.set_status(format!("opening {}", id.fmt_short()));
-        },
+        |cx, meta, action| p2p::collab::open(cx.editor, &meta.announcement, action),
     )
     .with_preview(|editor, meta| {
         let doc = editor.documents.get(&meta.doc?)?;

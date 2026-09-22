@@ -7,14 +7,12 @@ use crate::job::Job;
 use super::*;
 
 use helix_core::command_line::{Args, Flag, Signature, Token, TokenKind};
-use helix_core::crdt::{replica_id, Replica};
 use helix_core::fuzzy::fuzzy_match;
 use helix_core::indent::MAX_INDENT;
 use helix_core::line_ending;
 use helix_stdx::path::home_dir;
 use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
 use helix_view::editor::{CloseError, ConfigEvent};
-use helix_view::p2p::proto::Announcement;
 use helix_view::{expansion, p2p};
 use serde_json::Value;
 use tokio::sync::mpsc::channel;
@@ -2975,13 +2973,11 @@ fn session_new(
     }
 
     let (tx, mut rx) = channel(1);
-    cx.editor
-        .p2p_service
-        .requests
-        .send(p2p::Request::Ticket(tx))
-        .expect("p2p service should be running");
+    cx.editor.p2p_service.send(p2p::Request::Ticket(tx));
     cx.jobs.callback(async move {
-        let ticket = rx.recv().await.expect("ticket should be returned");
+        let Some(ticket) = rx.recv().await else {
+            bail!("the p2p service stopped");
+        };
         Ok(job::Callback::EditorCompositor(Box::new(
             move |editor: &mut Editor, _: &mut Compositor| {
                 let register = '+';
@@ -3009,11 +3005,7 @@ fn session_join(
         .first()
         .expect("command should have argument")
         .to_string();
-    cx.editor
-        .p2p_service
-        .requests
-        .send(p2p::Request::Join(ticket))
-        .expect("p2p service should be running");
+    cx.editor.p2p_service.send(p2p::Request::Join(ticket));
     Ok(())
 }
 
@@ -3026,39 +3018,7 @@ fn session_share(
         return Ok(());
     }
 
-    let owner = cx.editor.p2p_service.id;
-    let doc = doc_mut!(cx.editor);
-    ensure!(doc.crdt.is_none(), "buffer is already shared");
-
-    // Peers see the path relative to the workspace,
-    // or in full when the file is outside of it.
-    let path = doc.path().map(|path| {
-        let (workspace, _) = helix_loader::find_workspace();
-        path.strip_prefix(&workspace).unwrap_or(path).to_path_buf()
-    });
-
-    let replica = Replica::new(replica_id(), owner, path, doc.text());
-    let announcement = Announcement {
-        id: replica.shared_id(),
-        owner,
-        path: replica.path().map(ToOwned::to_owned),
-    };
-    doc.crdt = Some(replica);
-    cx.editor
-        .p2p_service
-        .files
-        .insert(announcement.id, announcement.clone());
-
-    // Join the file's topic before announcing it, so whoever opens
-    // the file finds us there.
-    let requests = &cx.editor.p2p_service.requests;
-    requests
-        .send(p2p::Request::Subscribe(announcement.clone()))
-        .expect("p2p service should be running");
-    requests
-        .send(p2p::Request::Announce(announcement))
-        .expect("p2p service should be running");
-    Ok(())
+    p2p::collab::share(cx.editor)
 }
 
 fn session_files(
@@ -3090,19 +3050,7 @@ fn session_close(
         return Ok(());
     }
 
-    // Leaving drops every peer, so nothing is shared any more.
-    for doc in cx.editor.documents_mut() {
-        doc.crdt = None;
-    }
-    // The files were announced in the session we leave.
-    cx.editor.p2p_service.files.clear();
-    cx.editor.p2p_service.pending.clear();
-
-    cx.editor
-        .p2p_service
-        .requests
-        .send(p2p::Request::Close)
-        .expect("p2p service should be running");
+    p2p::collab::close(cx.editor);
     Ok(())
 }
 

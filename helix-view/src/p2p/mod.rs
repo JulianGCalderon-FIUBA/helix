@@ -1,3 +1,4 @@
+pub mod collab;
 pub mod proto;
 
 use std::collections::HashMap;
@@ -111,6 +112,16 @@ impl Service {
             files: HashMap::new(),
             pending: HashMap::new(),
         }
+    }
+}
+
+impl Service {
+    /// Send a request to the actor.
+    ///
+    /// The actor only stops if it failed to start, and then there is nothing
+    /// better to do than drop the request.
+    pub fn send(&self, request: Request) {
+        let _ = self.requests.send(request);
     }
 }
 

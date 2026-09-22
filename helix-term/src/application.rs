@@ -1,11 +1,6 @@
 use arc_swap::{access::Map, ArcSwap};
 use futures_util::Stream;
-use helix_core::{
-    crdt::{replica_id, Replica},
-    diagnostic::Severity,
-    history::History,
-    pos_at_coords, syntax, Range, Selection, Transaction,
-};
+use helix_core::{diagnostic::Severity, pos_at_coords, syntax, Range, Selection};
 use helix_lsp::{
     lsp::{self, notification::Notification},
     util::lsp_range_to_range,
@@ -14,11 +9,10 @@ use helix_lsp::{
 use helix_stdx::path::get_relative_path;
 use helix_view::{
     align_view,
-    document::{Document, DocumentOpenError, DocumentSavedEventResult},
+    document::{DocumentOpenError, DocumentSavedEventResult},
     editor::{ConfigEvent, EditorEvent},
     graphics::Rect,
-    p2p::{self, proto::FileMessage},
-    theme,
+    p2p, theme,
     tree::Layout,
     Align, Editor,
 };
@@ -37,7 +31,6 @@ use crate::{
 
 use log::{debug, error, info, warn};
 use std::{
-    cell::Cell,
     io::{stdin, IsTerminal},
     path::Path,
     sync::Arc,
@@ -138,7 +131,7 @@ impl Application {
             handlers,
             workspace_trust,
         );
-        handlers::p2p::register_hooks(editor.p2p_service.requests.clone());
+        p2p::collab::register_hooks(editor.p2p_service.requests.clone());
         Self::load_configured_theme(&mut editor, &config.load(), &mut terminal, theme_mode);
 
         let keys = Box::new(Map::new(Arc::clone(&config), |config: &Config| {
@@ -689,7 +682,7 @@ impl Application {
                 }
             }
             EditorEvent::P2pEvent(event) => {
-                self.handle_p2p_event(event).await;
+                p2p::collab::handle_event(&mut self.editor, event);
                 helix_event::request_redraw();
             }
             EditorEvent::Redraw => {
@@ -1206,187 +1199,6 @@ impl Application {
                 lsp::MessageType::ERROR => self.editor.set_error(message),
                 lsp::MessageType::WARNING => self.editor.set_warning(message),
                 _ => self.editor.set_status(message),
-            }
-        }
-    }
-
-    pub async fn handle_p2p_event(&mut self, event: p2p::Event) {
-        match event {
-            p2p::Event::Connected(peer) => {
-                self.editor
-                    .set_status(format!("connected with {}", peer.fmt_short()));
-
-                // Announcements go out once, so a peer that joins later would
-                // never learn about the files shared before it. Everyone
-                // announces every file it knows of instead, which is cheap
-                // since announcements carry no contents.
-                for announcement in self.editor.p2p_service.files.values() {
-                    let _ = self
-                        .editor
-                        .p2p_service
-                        .requests
-                        .send(p2p::Request::Announce(announcement.clone()));
-                }
-            }
-            p2p::Event::Announced(announcement) => {
-                // Files are announced again whenever someone connects.
-                if self.editor.p2p_service.files.contains_key(&announcement.id) {
-                    return;
-                }
-
-                let owner = announcement.owner.fmt_short();
-                let status = match &announcement.path {
-                    Some(path) => format!("{owner} shared {}", path.display()),
-                    None => format!("{owner} shared a buffer ({})", announcement.id.fmt_short()),
-                };
-                self.editor
-                    .p2p_service
-                    .files
-                    .insert(announcement.id, announcement);
-                self.editor.set_status(status);
-            }
-            p2p::Event::FileConnected(id) => {
-                // Someone joined the file's topic, so they opened the file and
-                // wait for its contents. Gossip can't send to a single peer, so
-                // this reaches everyone in the topic, and everyone who has the
-                // file answers. Receivers only take the first snapshot.
-                let Some(doc) = self
-                    .editor
-                    .documents()
-                    .find(|doc| doc.shared_id() == Some(id))
-                else {
-                    return;
-                };
-                let Some(replica) = &doc.crdt else {
-                    return;
-                };
-
-                let message = FileMessage::Snapshot {
-                    text: doc.text().to_string(),
-                    replica: replica.encode(),
-                };
-                let _ = self
-                    .editor
-                    .p2p_service
-                    .requests
-                    .send(p2p::Request::Broadcast(id, message));
-            }
-            p2p::Event::File(id, FileMessage::Snapshot { text, replica }) => {
-                // Snapshots reach everyone in the topic, so only take the
-                // first one for a file we asked for.
-                let Some(doc_id) = self.editor.p2p_service.pending.remove(&id) else {
-                    return;
-                };
-                let Some(announcement) = self.editor.p2p_service.files.get(&id) else {
-                    return;
-                };
-
-                let crdt = match Replica::decode(
-                    id,
-                    announcement.owner,
-                    announcement.path.clone(),
-                    replica_id(),
-                    &replica,
-                ) {
-                    Ok(crdt) => crdt,
-                    Err(err) => {
-                        self.editor
-                            .set_error(format!("failed to open shared buffer: {err:#}"));
-                        return;
-                    }
-                };
-
-                let view_id = self
-                    .editor
-                    .tree
-                    .views()
-                    .find(|(view, _)| view.doc == doc_id)
-                    .map_or(self.editor.tree.focus, |(view, _)| view.id);
-                let Some(doc) = self.editor.documents.get_mut(&doc_id) else {
-                    // The buffer was closed while waiting. It had no replica
-                    // yet, so closing it didn't leave the file's topic.
-                    let _ = self
-                        .editor
-                        .p2p_service
-                        .requests
-                        .send(p2p::Request::Unsubscribe(id));
-                    return;
-                };
-
-                // Replace whatever the buffer holds, as it only ever held a
-                // placeholder. The replica is attached afterwards, so this
-                // change isn't sent to the others as an edit of our own.
-                doc.ensure_view_init(view_id);
-                let transaction = Transaction::change(
-                    doc.text(),
-                    [(0, doc.text().len_chars(), Some(text.into()))].into_iter(),
-                );
-                doc.apply(&transaction, view_id);
-                doc.set_selection(view_id, Selection::point(0));
-
-                // Start the history from the snapshot. Otherwise the next undo
-                // would take the snapshot with it, emptying the buffer, and
-                // send that to everyone as a deletion of the whole file.
-                doc.append_changes_to_history(self.editor.tree.get_mut(view_id));
-                doc.history = Cell::new(History::default());
-
-                doc.crdt = Some(crdt);
-            }
-            p2p::Event::File(id, FileMessage::Edit(op)) => {
-                let view_id = self
-                    .editor
-                    .tree
-                    .traverse()
-                    .find(|(_, view)| {
-                        self.editor
-                            .documents
-                            .get(&view.doc)
-                            .and_then(Document::shared_id)
-                            == Some(id)
-                    })
-                    .map_or(self.editor.tree.focus, |(view_id, _)| view_id);
-
-                let Some(doc) = self
-                    .editor
-                    .documents
-                    .values_mut()
-                    .find(|doc| doc.shared_id() == Some(id))
-                else {
-                    return;
-                };
-
-                // apply reads the document's selection for view_id, which a
-                // buffer that view has never displayed does not have yet.
-                doc.ensure_view_init(view_id);
-
-                let Some(mut crdt) = doc.crdt.take() else {
-                    return;
-                };
-                if let Some(transaction) = crdt.from_remote(doc.text(), &op) {
-                    doc.apply(&transaction, view_id);
-                }
-                doc.crdt = Some(crdt);
-            }
-            // Our edits to the file no longer reach anyone, so stop treating
-            // it as shared rather than let it silently drift apart.
-            p2p::Event::FileLeft(id) => {
-                self.editor.p2p_service.pending.remove(&id);
-                for doc in self.editor.documents_mut() {
-                    if doc.shared_id() == Some(id) {
-                        doc.crdt = None;
-                    }
-                }
-            }
-            // Same as :session-close, but the session ended on its own.
-            p2p::Event::Left => {
-                self.editor.p2p_service.files.clear();
-                self.editor.p2p_service.pending.clear();
-                for doc in self.editor.documents_mut() {
-                    doc.crdt = None;
-                }
-            }
-            p2p::Event::Error(err) => {
-                self.editor.set_error(err);
             }
         }
     }

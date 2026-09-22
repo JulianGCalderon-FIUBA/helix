@@ -22,7 +22,6 @@ pub mod diagnostics;
 mod document_colors;
 mod document_highlight;
 mod document_links;
-pub mod p2p;
 mod prompt;
 mod signature_help;
 mod snippet;
