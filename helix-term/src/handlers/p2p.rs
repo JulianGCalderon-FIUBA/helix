@@ -12,12 +12,12 @@ pub fn register_hooks(p2p: Service) {
         if event.ghost_transaction || event.remote_transaction {
             return Ok(());
         }
-        let Some(replica) = event.doc.crdt.as_mut() else {
+        let Some(shared) = event.doc.shared.as_mut() else {
             return Ok(());
         };
 
-        let id = replica.shared_id();
-        for op in replica.from_local(event.changes) {
+        let id = shared.id;
+        for op in shared.replica.from_local(event.changes) {
             p2p.broadcast(wire::encode(&Message::Edit { id, op }));
         }
 

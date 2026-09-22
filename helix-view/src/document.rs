@@ -47,7 +47,7 @@ use crate::{
     editor::Config,
     events::{DocumentDidChange, SelectionDidChange},
     expansion,
-    p2p::crdt::{Replica, SharedId},
+    p2p::{session::Shared, wire::SharedId},
     view::ViewPosition,
     DocumentId, Editor, Theme, View, ViewId,
 };
@@ -193,7 +193,7 @@ pub struct Document {
     // be more troublesome.
     pub history: Cell<History>,
     /// Present only while the document is shared with a session.
-    pub crdt: Option<Replica>,
+    pub shared: Option<Shared>,
     pub config: Arc<dyn DynAccess<Config>>,
 
     savepoints: Vec<Weak<SavePoint>>,
@@ -757,7 +757,7 @@ impl Document {
             diagnostics: Vec::new(),
             version: 0,
             history: Cell::new(History::default()),
-            crdt: None,
+            shared: None,
             savepoints: Vec::new(),
             last_saved_time: SystemTime::now(),
             last_saved_revision: 0,
@@ -2067,7 +2067,7 @@ impl Document {
 
     /// The session wide id of this document, if it is shared.
     pub fn shared_id(&self) -> Option<SharedId> {
-        self.crdt.as_ref().map(Replica::shared_id)
+        self.shared.as_ref().map(|shared| shared.id)
     }
 
     /// File path as a URL.

@@ -51,7 +51,7 @@ use helix_view::{
     info::Info,
     input::KeyEvent,
     keyboard::KeyCode,
-    p2p::crdt::{EndpointId, SharedId},
+    p2p::{net::EndpointId, wire::SharedId},
     theme::Style,
     tree,
     view::View,
@@ -3329,7 +3329,7 @@ fn buffer_picker(cx: &mut Context) {
             .map(helix_stdx::path::get_relative_path),
         is_modified: doc.is_modified(),
         is_current: doc.id() == current,
-        is_shared: doc.crdt.is_some(),
+        is_shared: doc.shared.is_some(),
         focused_at: doc.focused_at,
     };
 
@@ -3409,12 +3409,12 @@ fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
     let items = editor
         .documents()
         .filter_map(|doc| {
-            let replica = doc.crdt.as_ref()?;
+            let shared = doc.shared.as_ref()?;
             Some(SessionFileMeta {
                 id: doc.id(),
-                owner: replica.owner(),
-                path: replica.path().map(ToOwned::to_owned),
-                shared_id: replica.shared_id(),
+                owner: shared.owner,
+                path: shared.path.clone(),
+                shared_id: shared.id,
             })
         })
         .collect::<Vec<_>>();

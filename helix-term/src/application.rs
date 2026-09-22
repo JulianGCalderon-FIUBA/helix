@@ -14,7 +14,8 @@ use helix_view::{
     graphics::Rect,
     p2p::{
         self,
-        crdt::{replica_id, Replica},
+        crdt::Replica,
+        session::Shared,
         wire::{self, Message},
     },
     theme,
@@ -1216,14 +1217,8 @@ impl Application {
 
                 // Offer every shared buffer to late joiners.
                 for doc in self.editor.documents() {
-                    if let Some(replica) = &doc.crdt {
-                        let message = Message::Share {
-                            id: replica.shared_id(),
-                            owner: replica.owner(),
-                            path: replica.path().map(ToOwned::to_owned),
-                            text: doc.text().to_string(),
-                            replica: replica.encode(),
-                        };
+                    if let Some(shared) = &doc.shared {
+                        let message = shared.to_message(doc.text());
                         self.editor.p2p.broadcast(wire::encode(&message));
                     }
                 }
@@ -1252,8 +1247,8 @@ impl Application {
                         }
                     };
 
-                    let crdt = match Replica::decode(id, owner, path, replica_id(), &replica) {
-                        Ok(crdt) => crdt,
+                    let replica = match Replica::decode(&replica) {
+                        Ok(replica) => replica,
                         Err(err) => {
                             self.editor
                                 .set_error(format!("failed to join shared buffer: {err:#}"));
@@ -1262,7 +1257,12 @@ impl Application {
                     };
 
                     let doc_id = self.editor.new_file_from_string(Action::Load, &text);
-                    doc_mut!(self.editor, &doc_id).crdt = Some(crdt);
+                    doc_mut!(self.editor, &doc_id).shared = Some(Shared {
+                        id,
+                        owner,
+                        path,
+                        replica,
+                    });
 
                     self.editor.set_status(status);
                 }
@@ -1294,13 +1294,13 @@ impl Application {
                     // buffer that view has never displayed does not have yet.
                     doc.ensure_view_init(view_id);
 
-                    let Some(mut crdt) = doc.crdt.take() else {
+                    let Some(mut shared) = doc.shared.take() else {
                         return;
                     };
-                    if let Some(transaction) = crdt.from_remote(doc.text(), &op) {
+                    if let Some(transaction) = shared.replica.from_remote(doc.text(), &op) {
                         doc.apply(&transaction, view_id);
                     }
-                    doc.crdt = Some(crdt);
+                    doc.shared = Some(shared);
                 }
             },
             p2p::net::Event::Error(err) => {

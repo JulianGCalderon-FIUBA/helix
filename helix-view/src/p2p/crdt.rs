@@ -3,28 +3,10 @@
 //! Cola counts in whatever unit you decide and never checks. Helix indexes
 //! chars, so every `usize` crossing this boundary is a char index.
 
-use std::path::{Path, PathBuf};
-
 use anyhow::Result;
 use cola::{EncodedReplica, Insertion, ReplicaId};
-pub use iroh::EndpointId;
-use serde::{Deserialize, Serialize};
-
 use helix_core::{ChangeSet, Operation, Rope, Transaction};
-
-/// Identifies a single document across all peers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SharedId(u64);
-
-impl SharedId {
-    pub fn random() -> Self {
-        Self(rand::random())
-    }
-
-    pub fn fmt_short(&self) -> String {
-        format!("{:08x}", self.0 as u32)
-    }
-}
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RemoteOperation {
@@ -32,59 +14,27 @@ pub enum RemoteOperation {
     Delete(cola::Deletion),
 }
 
-pub fn replica_id() -> ReplicaId {
+/// Cola needs every replica of a document to have its own id.
+fn replica_id() -> ReplicaId {
     // Cola panics on a zero id.
     rand::random_range(1..=ReplicaId::MAX)
 }
 
 pub struct Replica {
-    shared_id: SharedId,
-    owner: EndpointId,
-    path: Option<PathBuf>,
     replica: cola::Replica,
 }
 
 impl Replica {
-    pub fn new(
-        replica_id: ReplicaId,
-        owner: EndpointId,
-        path: Option<PathBuf>,
-        text: &Rope,
-    ) -> Self {
+    pub fn new(text: &Rope) -> Self {
         Self {
-            shared_id: SharedId::random(),
-            owner,
-            path,
-            replica: cola::Replica::new(replica_id, text.len_chars()),
+            replica: cola::Replica::new(replica_id(), text.len_chars()),
         }
     }
 
-    pub fn shared_id(&self) -> SharedId {
-        self.shared_id
-    }
-
-    pub fn owner(&self) -> EndpointId {
-        self.owner
-    }
-
-    /// The path relative to the owner's workspace.
-    pub fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
-    }
-
-    pub fn decode(
-        shared_id: SharedId,
-        owner: EndpointId,
-        path: Option<PathBuf>,
-        replica_id: ReplicaId,
-        encoded: &[u8],
-    ) -> Result<Self> {
+    pub fn decode(encoded: &[u8]) -> Result<Self> {
         let encoded = EncodedReplica::from_bytes(encoded);
         Ok(Self {
-            shared_id,
-            owner,
-            path,
-            replica: cola::Replica::decode(replica_id, &encoded)?,
+            replica: cola::Replica::decode(replica_id(), &encoded)?,
         })
     }
 

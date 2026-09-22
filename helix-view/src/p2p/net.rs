@@ -2,9 +2,10 @@ use std::future::Future;
 
 use anyhow::{ensure, Result};
 use bytes::Bytes;
+pub use iroh::EndpointId;
 use iroh::{
     address_lookup::memory::MemoryLookup, endpoint::presets, protocol::Router, Endpoint,
-    EndpointAddr, EndpointId, SecretKey,
+    EndpointAddr, SecretKey,
 };
 use iroh_gossip::{
     api::{ApiError, Event as GossipEvent, GossipTopic},
