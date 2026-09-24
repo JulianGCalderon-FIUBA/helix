@@ -81,6 +81,6 @@ impl Replica {
                 )
             }
         };
-        Some(transaction.as_remote())
+        Some(transaction)
     }
 }

@@ -46,7 +46,7 @@ impl Shared {
 /// Broadcasts local edits to shared documents.
 pub fn register_hooks(p2p: Service) {
     register_hook!(move |event: &mut DocumentDidChange<'_>| {
-        if event.ghost_transaction || event.remote_transaction {
+        if event.ghost_transaction {
             return Ok(());
         }
         let Some(shared) = event.doc.shared.as_mut() else {
@@ -191,6 +191,8 @@ impl Editor {
 
         doc.ensure_view_init(view_id);
 
+        // Taken while applying, so the hook sees an unshared document and
+        // doesn't broadcast the remote edit back.
         let Some(mut shared) = doc.shared.take() else {
             return;
         };
