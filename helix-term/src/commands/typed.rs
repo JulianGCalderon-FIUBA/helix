@@ -2978,7 +2978,7 @@ fn session_ticket(
             move |editor: &mut Editor, _: &mut Compositor| {
                 let register = '+';
                 match editor.registers.write(register, vec![ticket]) {
-                    Ok(_) => editor.set_status(format!("yanked ticket to register {register}",)),
+                    Ok(_) => editor.set_status(format!("yanked ticket to register {register}")),
                     Err(err) => editor.set_error(err.to_string()),
                 }
             },
@@ -2997,11 +2997,7 @@ fn session_join(
         return Ok(());
     }
 
-    let ticket = args
-        .first()
-        .expect("command should have argument")
-        .to_string();
-    cx.editor.p2p.join(ticket);
+    cx.editor.p2p.join(args[0].to_string());
     Ok(())
 }
 
@@ -4253,7 +4249,6 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
             ..Signature::DEFAULT
         },
     },
-
 ];
 
 pub static TYPABLE_COMMAND_MAP: Lazy<HashMap<&'static str, &'static TypableCommand>> =
