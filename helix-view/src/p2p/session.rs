@@ -64,7 +64,7 @@ pub fn register_hooks(p2p: Service) {
 
 impl Editor {
     /// Shares a document with the session.
-    pub fn share(&mut self, doc_id: DocumentId) -> Result<()> {
+    pub fn share_document(&mut self, doc_id: DocumentId) -> Result<()> {
         let owner = self.p2p.id();
         let doc = self
             .documents
@@ -85,18 +85,18 @@ impl Editor {
     }
 
     pub fn leave_session(&mut self) {
-        self.p2p.close();
-        self.unshare_all();
+        self.p2p.leave();
+        self.unshare_all_documents();
     }
 
     /// Unshares all documents, but keeps the buffers.
-    fn unshare_all(&mut self) {
+    fn unshare_all_documents(&mut self) {
         for doc in self.documents_mut() {
             doc.shared = None;
         }
     }
 
-    /// Called by the application for every net event.
+    /// Called by the application for every p2p event.
     pub fn handle_p2p_event(&mut self, event: Event) {
         match event {
             Event::NeighborUp(peer) => {
@@ -110,7 +110,6 @@ impl Editor {
                     }
                 }
             }
-            // Decoded here rather than in net, which only moves bytes.
             Event::Received(bytes) => match wire::decode(&bytes) {
                 Ok(Message::Share {
                     id,
@@ -119,13 +118,11 @@ impl Editor {
                     text,
                     replica,
                 }) => self.open_shared(id, owner, path, &text, &replica),
-                Ok(Message::Edit { id, op }) => self.apply_remote(id, &op),
+                Ok(Message::Edit { id, op }) => self.apply_remote_operation(id, &op),
                 Err(err) => self.set_error(format!("bad message: {err:#}")),
             },
-            // Otherwise the buffers would still look shared, while their
-            // edits went nowhere.
-            Event::Closed(reason) => {
-                self.unshare_all();
+            Event::Quit(reason) => {
+                self.unshare_all_documents();
                 self.set_error(reason);
             }
             Event::Error(err) => self.set_error(err),
@@ -175,7 +172,7 @@ impl Editor {
     }
 
     /// Applies another peer's edit to our copy of the document.
-    fn apply_remote(&mut self, id: SharedId, op: &RemoteOperation) {
+    fn apply_remote_operation(&mut self, id: SharedId, op: &RemoteOperation) {
         let view_id = self
             .tree
             .traverse()

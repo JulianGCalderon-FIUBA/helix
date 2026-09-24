@@ -1,5 +1,4 @@
-//! The transport layer moves opaque bytes between the members of a session and
-//! knows nothing about documents.
+//! The transport layer moves opaque bytes between peers.
 
 use std::future::Future;
 
@@ -29,22 +28,20 @@ const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 #[derive(Debug)]
 pub enum Event {
     NeighborUp(EndpointId),
-    /// Some member broadcast these bytes.
     Received(Bytes),
-    Closed(String),
+    Quit(String),
     Error(String),
 }
 
-/// What the editor asks of the actor.
+/// What the editor asks to the service.
 #[derive(Debug)]
 enum Request {
     Ticket(oneshot::Sender<String>),
     Join(String),
-    Close,
+    Leave,
     Broadcast(Bytes),
 }
 
-/// Handle to the actor task that owns the service.
 #[derive(Clone)]
 pub struct Service {
     id: EndpointId,
@@ -85,13 +82,15 @@ impl Service {
     }
 
     /// Attempts to join a session.
+    ///
+    /// Errors are notified as events.
     pub fn join(&self, ticket: String) {
         self.send(Request::Join(ticket));
     }
 
-    /// Leaves the session. Emits no Closed event.
-    pub fn close(&self) {
-        self.send(Request::Close);
+    /// Leaves the session.
+    pub fn leave(&self) {
+        self.send(Request::Leave);
     }
 
     /// Sends to every member of the session. Delivery is best-effort.
@@ -103,13 +102,11 @@ impl Service {
     fn send(&self, request: Request) {
         self.requests
             .send(request)
-            .expect("p2p actor should be running");
+            .expect("internal actor should be running");
     }
 }
 
-/// An invitation into a session: its topic and one member to dial. Any member
-/// can hand one out, since it only needs to name some member to connect to
-/// first.
+/// An invitation into a session. Any member can hand one out.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionTicket {
     pub topic: TopicId,
@@ -128,16 +125,12 @@ impl Ticket for SessionTicket {
     }
 }
 
-/// The [`Service`]'s internal actor, owning our endpoint and the session's
-/// gossip topic. Runs in its own task, so none of this needs locking.
+/// The Service's internal actor
 struct Actor {
     endpoint: Endpoint,
-    gossip: Gossip,
-    /// Accepts incoming connections and hands the ones speaking gossip's ALPN
-    /// to gossip. Kept alive by this field: dropping it stops accepting.
     _router: Router,
-    /// Addresses learned from tickets for gossip to dial,
-    /// as it dials bootstrap peers by id alone.
+    gossip: Gossip,
+    /// Addresses learned from tickets.
     addresses: MemoryLookup,
     events: UnboundedSender<Event>,
     /// The swarm we are in, if any.
@@ -145,17 +138,12 @@ struct Actor {
 }
 
 impl Actor {
-    /// Binds the endpoint and starts gossip on it.
     async fn bind(secret_key: SecretKey, events: UnboundedSender<Event>) -> Self {
-        // N0 uses n0's public relays and address lookup, so peers can reach
-        // each other behind NATs without any configuration.
         let endpoint = Endpoint::builder(presets::N0)
             .secret_key(secret_key)
             .bind()
             .await
             .expect("failed to bind the endpoint");
-        // Wait for a relay connection, so the address we put in tickets is
-        // one peers can actually reach.
         endpoint.online().await;
         log::info!("listening as {}", endpoint.id().fmt_short());
 
@@ -166,7 +154,6 @@ impl Actor {
             .accept(ALPN, gossip.clone())
             .spawn();
 
-        // Registered once, and filled in as we join sessions.
         let addresses = MemoryLookup::new();
         endpoint
             .address_lookup()
@@ -206,14 +193,13 @@ impl Actor {
                 Ok(())
             }
             Request::Join(ticket) => self.join(&ticket).await,
-            Request::Close => {
-                self.close();
+            Request::Leave => {
+                self.leave();
                 Ok(())
             }
             Request::Broadcast(message) => self.broadcast(message).await,
         };
 
-        // Nobody awaits the requests, so errors can only go out as events.
         if let Err(err) = result {
             self.report(format!("{:#}", err));
         }
@@ -226,7 +212,6 @@ impl Actor {
                 let topic = TopicId::from_bytes(rand::random());
                 let subscription = self
                     .gossip
-                    // No bootstrap peers: we are the first member.
                     .subscribe(topic, Vec::new())
                     .await
                     .expect("gossip should be running");
@@ -249,10 +234,7 @@ impl Actor {
             addr.id != self.endpoint.id(),
             "cannot join your own session"
         );
-        ensure!(
-            self.topic.is_none(),
-            "already in a session, close it before joining another"
-        );
+        ensure!(self.topic.is_none(), "already in a session");
 
         let bootstrap = addr.id;
         self.addresses.add_endpoint_info(addr);
@@ -270,7 +252,7 @@ impl Actor {
         Ok(())
     }
 
-    fn close(&mut self) {
+    fn leave(&mut self) {
         self.topic = None;
     }
 
@@ -293,22 +275,16 @@ impl Actor {
             Some(Ok(GossipEvent::Received(message))) => {
                 let _ = self.events.send(Event::Received(message.content));
             }
-            // We lost some messages. The dropped edits are lost for good, so
-            // leave instead of drifting apart unnoticed. Gossip closes a
-            // lagging subscription anyway.
-            Some(Ok(GossipEvent::Lagged)) => {
-                self.drop_topic("fell behind the session and left it".into())
-            }
-            Some(Err(err)) => self.drop_topic(format!("session failed: {:#}", err)),
-            // The topic's stream ended, so gossip is done with it.
-            None => self.drop_topic("left the session".into()),
+            Some(Ok(GossipEvent::Lagged)) => self.quit("fell behind the session".into()),
+            Some(Err(err)) => self.quit(format!("session failed: {:#}", err)),
+            None => self.quit("left the topic".into()),
         }
     }
 
-    fn drop_topic(&mut self, reason: String) {
+    fn quit(&mut self, reason: String) {
         log::error!("{reason}");
-        self.close();
-        let _ = self.events.send(Event::Closed(reason));
+        self.leave();
+        let _ = self.events.send(Event::Quit(reason));
     }
 
     fn report(&self, error: String) {

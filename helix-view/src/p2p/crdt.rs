@@ -1,8 +1,4 @@
-//! Bridges Helix's [`ChangeSet`]s to [`cola`], a text CRDT.
-//!
-//! Cola never sees the text. It tracks where each edit landed relative to the
-//! others, and tells us where a remote edit falls in our text. Applying the
-//! edit, and carrying the inserted text around, is up to us.
+//! Bridges Helix's ChangeSets to CRDT operations.
 
 use anyhow::Result;
 use cola::{EncodedReplica, Insertion, ReplicaId};
@@ -32,9 +28,8 @@ impl Replica {
 
     pub fn decode(encoded: &[u8]) -> Result<Self> {
         let encoded = EncodedReplica::from_bytes(encoded);
-        Ok(Self {
-            replica: cola::Replica::decode(replica_id(), &encoded)?,
-        })
+        let replica = cola::Replica::decode(replica_id(), &encoded)?;
+        Ok(Self { replica })
     }
 
     pub fn encode(&self) -> Vec<u8> {

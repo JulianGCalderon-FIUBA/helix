@@ -2065,7 +2065,6 @@ impl Document {
         self.path.as_deref()
     }
 
-    /// The session wide id of this document, if it is shared.
     pub fn shared_id(&self) -> Option<SharedId> {
         self.shared.as_ref().map(|shared| shared.id)
     }

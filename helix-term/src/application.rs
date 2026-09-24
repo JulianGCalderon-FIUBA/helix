@@ -131,6 +131,7 @@ impl Application {
             handlers,
             workspace_trust,
         );
+        // Register here because we need access to the p2p service.
         p2p::session::register_hooks(editor.p2p.clone());
         Self::load_configured_theme(&mut editor, &config.load(), &mut terminal, theme_mode);
 

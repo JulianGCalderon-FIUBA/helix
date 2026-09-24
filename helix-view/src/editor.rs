@@ -2082,7 +2082,6 @@ impl Editor {
         )
     }
 
-    /// Opens `text` as a scratch buffer.
     pub fn new_file_from_string(&mut self, action: Action, text: &str) -> DocumentId {
         let doc = Document::from(
             helix_core::Rope::from(text),

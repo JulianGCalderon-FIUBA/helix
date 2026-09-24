@@ -3399,37 +3399,33 @@ fn buffer_picker(cx: &mut Context) {
 
 /// Opens a picker of every buffer shared in the collaborative session
 fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
-    struct SessionFileMeta {
+    struct BufferMeta {
         id: DocumentId,
+        shared_id: SharedId,
         owner: EndpointId,
         path: Option<PathBuf>,
-        shared_id: SharedId,
     }
 
     let items = editor
         .documents()
         .filter_map(|doc| {
-            let shared = doc.shared.as_ref()?;
-            Some(SessionFileMeta {
+            Some(BufferMeta {
                 id: doc.id(),
-                owner: shared.owner,
-                path: shared.path.clone(),
-                shared_id: shared.id,
+                owner: doc.shared.as_ref()?.owner,
+                path: doc.shared.as_ref()?.path.clone(),
+                shared_id: doc.shared.as_ref()?.id,
             })
         })
         .collect::<Vec<_>>();
 
     let columns = [
-        PickerColumn::new("owner", |meta: &SessionFileMeta, _| {
+        PickerColumn::new("owner", |meta: &BufferMeta, _| {
             meta.owner.fmt_short().to_string().into()
         }),
-        PickerColumn::new(
-            "path",
-            |meta: &SessionFileMeta, config: &PathStyleConfig| {
-                config.stylize(meta.path.as_deref(), None)
-            },
-        ),
-        PickerColumn::new("id", |meta: &SessionFileMeta, _| {
+        PickerColumn::new("path", |meta: &BufferMeta, config: &PathStyleConfig| {
+            config.stylize(meta.path.as_deref(), None)
+        }),
+        PickerColumn::new("id", |meta: &BufferMeta, _| {
             meta.shared_id.fmt_short().into()
         }),
     ];

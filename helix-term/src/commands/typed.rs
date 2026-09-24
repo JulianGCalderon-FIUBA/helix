@@ -3015,7 +3015,7 @@ fn session_share(
     }
 
     let doc_id = doc!(cx.editor).id();
-    cx.editor.share(doc_id)
+    cx.editor.share_document(doc_id)
 }
 
 fn session_files(
