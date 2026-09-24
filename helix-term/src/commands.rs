@@ -24,7 +24,6 @@ use helix_core::{
     chars::char_is_word,
     command_line::{self, Args},
     comment,
-    crdt::{EndpointId, SharedId},
     doc_formatter::TextFormat,
     encoding, find_workspace,
     graphemes::{self, next_grapheme_boundary},
@@ -52,6 +51,7 @@ use helix_view::{
     info::Info,
     input::KeyEvent,
     keyboard::KeyCode,
+    p2p::{net::EndpointId, wire::SharedId},
     theme::Style,
     tree,
     view::View,
@@ -3329,7 +3329,7 @@ fn buffer_picker(cx: &mut Context) {
             .map(helix_stdx::path::get_relative_path),
         is_modified: doc.is_modified(),
         is_current: doc.id() == current,
-        is_shared: doc.crdt.is_some(),
+        is_shared: doc.shared.is_some(),
         focused_at: doc.focused_at,
     };
 
@@ -3399,38 +3399,34 @@ fn buffer_picker(cx: &mut Context) {
 
 /// Opens a picker of every buffer shared in the collaborative session
 fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
-    struct SessionFileMeta {
+    struct BufferMeta {
         id: DocumentId,
+        shared_id: SharedId,
         owner: EndpointId,
         path: Option<PathBuf>,
-        shared_id: SharedId,
     }
 
     let items = editor
         .documents()
         .filter_map(|doc| {
-            let replica = doc.crdt.as_ref()?;
-            Some(SessionFileMeta {
+            Some(BufferMeta {
                 id: doc.id(),
-                owner: replica.owner(),
-                path: replica.path().map(ToOwned::to_owned),
-                shared_id: replica.shared_id(),
+                owner: doc.shared.as_ref()?.owner,
+                path: doc.shared.as_ref()?.path.clone(),
+                shared_id: doc.shared.as_ref()?.id,
             })
         })
         .collect::<Vec<_>>();
 
     let columns = [
-        PickerColumn::new("owner", |meta: &SessionFileMeta, _| {
+        PickerColumn::new("owner", |meta: &BufferMeta, _| {
             meta.owner.fmt_short().to_string().into()
         }),
-        PickerColumn::new(
-            "path",
-            |meta: &SessionFileMeta, config: &PathStyleConfig| {
-                config.stylize(meta.path.as_deref(), None)
-            },
-        ),
-        PickerColumn::new("id", |meta: &SessionFileMeta, _| {
-            meta.shared_id.fmt_short().into()
+        PickerColumn::new("path", |meta: &BufferMeta, config: &PathStyleConfig| {
+            config.stylize(meta.path.as_deref(), None)
+        }),
+        PickerColumn::new("id", |meta: &BufferMeta, _| {
+            meta.shared_id.fmt_short().to_string().into()
         }),
     ];
 

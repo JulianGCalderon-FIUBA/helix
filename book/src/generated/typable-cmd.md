@@ -100,7 +100,7 @@
 | `:workspace-trust` | Allow language servers and local config for the current workspace. |
 | `:workspace-untrust` | Revoke the current workspace's trust grant or exclusion. |
 | `:workspace-exclude` | Mark the current workspace as never-prompt. Never prompts for trust again. |
-| `:session-new` | Create a ticket for the collaborative session and yank it into system clipboard. |
+| `:session-ticket` | Create a ticket for the collaborative session and yank it into system clipboard. |
 | `:session-join` | Join a collaborative session with the given ticket. |
 | `:session-share` | Share the focused document with every peer of the current collaborative session. |
 | `:session-files` | Open a picker of the buffers shared in the current collaborative session. |

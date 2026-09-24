@@ -14,8 +14,7 @@ events! {
         view: ViewId,
         old_text: &'a Rope,
         changes: &'a ChangeSet,
-        ghost_transaction: bool,
-        remote_transaction: bool
+        ghost_transaction: bool
     }
     DocumentDidClose<'a> {
         editor: &'a mut Editor,

@@ -7,17 +7,14 @@ use crate::job::Job;
 use super::*;
 
 use helix_core::command_line::{Args, Flag, Signature, Token, TokenKind};
-use helix_core::crdt::{replica_id, Replica};
 use helix_core::fuzzy::fuzzy_match;
 use helix_core::indent::MAX_INDENT;
 use helix_core::line_ending;
 use helix_stdx::path::home_dir;
 use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
 use helix_view::editor::{CloseError, ConfigEvent};
-use helix_view::p2p::proto::Message;
-use helix_view::{expansion, p2p};
+use helix_view::expansion;
 use serde_json::Value;
-use tokio::sync::mpsc::channel;
 use ui::completers::{self, Completer};
 
 #[derive(Clone)]
@@ -2965,7 +2962,7 @@ fn noop(_cx: &mut compositor::Context, _args: Args, _event: PromptEvent) -> anyh
     Ok(())
 }
 
-fn session_new(
+fn session_ticket(
     cx: &mut compositor::Context,
     _args: Args,
     event: PromptEvent,
@@ -2974,19 +2971,14 @@ fn session_new(
         return Ok(());
     }
 
-    let (tx, mut rx) = channel(1);
-    cx.editor
-        .p2p_service
-        .requests
-        .send(p2p::Request::Ticket(tx))
-        .expect("p2p service should be running");
+    let ticket = cx.editor.p2p.ticket();
     cx.jobs.callback(async move {
-        let ticket = rx.recv().await.expect("ticket should be returned");
+        let ticket = ticket.await;
         Ok(job::Callback::EditorCompositor(Box::new(
             move |editor: &mut Editor, _: &mut Compositor| {
                 let register = '+';
                 match editor.registers.write(register, vec![ticket]) {
-                    Ok(_) => editor.set_status(format!("yanked ticket to register {register}",)),
+                    Ok(_) => editor.set_status(format!("yanked ticket to register {register}")),
                     Err(err) => editor.set_error(err.to_string()),
                 }
             },
@@ -3005,15 +2997,17 @@ fn session_join(
         return Ok(());
     }
 
-    let ticket = args
-        .first()
-        .expect("command should have argument")
-        .to_string();
-    cx.editor
-        .p2p_service
-        .requests
-        .send(p2p::Request::Join(ticket))
-        .expect("p2p service should be running");
+    let join = cx.editor.p2p.join(args[0].to_string());
+    cx.editor.set_status("joining session");
+    cx.jobs.callback(async move {
+        let result = join.await;
+        Ok(job::Callback::Editor(Box::new(
+            move |editor: &mut Editor| match result {
+                Ok(()) => editor.set_status("joined session"),
+                Err(err) => editor.set_error(format!("failed to join session: {err:#}")),
+            },
+        )))
+    });
     Ok(())
 }
 
@@ -3026,32 +3020,15 @@ fn session_share(
         return Ok(());
     }
 
-    let owner = cx.editor.p2p_service.id;
-    let doc = doc_mut!(cx.editor);
-    ensure!(doc.crdt.is_none(), "buffer is already shared");
+    let doc_id = doc!(cx.editor).id();
+    cx.editor.share_document(doc_id)?;
 
-    // Peers see the path relative to the workspace,
-    // or in full when the file is outside of it.
-    let path = doc.path().map(|path| {
-        let (workspace, _) = helix_loader::find_workspace();
-        path.strip_prefix(&workspace).unwrap_or(path).to_path_buf()
-    });
-
-    let replica = Replica::new(replica_id(), owner, path, doc.text());
-    let message = Message::Share {
-        id: replica.shared_id(),
-        owner: replica.owner(),
-        path: replica.path().map(ToOwned::to_owned),
-        text: doc.text().to_string(),
-        replica: replica.encode(),
-    };
-    doc.crdt = Some(replica);
-
-    cx.editor
-        .p2p_service
-        .requests
-        .send(p2p::Request::Broadcast(message))
-        .expect("p2p service should be running");
+    let label = doc!(cx.editor)
+        .shared
+        .as_ref()
+        .expect("document was just shared")
+        .label();
+    cx.editor.set_status(format!("shared {label}"));
     Ok(())
 }
 
@@ -3084,16 +3061,8 @@ fn session_close(
         return Ok(());
     }
 
-    // Leaving drops every peer, so nothing is shared any more.
-    for doc in cx.editor.documents_mut() {
-        doc.crdt = None;
-    }
-
-    cx.editor
-        .p2p_service
-        .requests
-        .send(p2p::Request::Close)
-        .expect("p2p service should be running");
+    cx.editor.leave_session();
+    cx.editor.set_status("left session");
     Ok(())
 }
 
@@ -4245,10 +4214,10 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         signature: Signature { positionals: (0, None), ..Signature::DEFAULT },
     },
     TypableCommand {
-        name: "session-new",
+        name: "session-ticket",
         aliases: &[],
         doc: "Create a ticket for the collaborative session and yank it into system clipboard.",
-        fun: session_new,
+        fun: session_ticket,
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),
@@ -4299,7 +4268,6 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
             ..Signature::DEFAULT
         },
     },
-
 ];
 
 pub static TYPABLE_COMMAND_MAP: Lazy<HashMap<&'static str, &'static TypableCommand>> =
