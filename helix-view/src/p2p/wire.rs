@@ -1,6 +1,6 @@
 //! The messages peers exchange, and how they turn into bytes.
 
-use std::path::PathBuf;
+use std::{fmt::Display, path::PathBuf};
 
 use anyhow::Result;
 use bytes::Bytes;
@@ -17,7 +17,8 @@ impl SharedId {
         Self(rand::random())
     }
 
-    pub fn fmt_short(&self) -> String {
+    /// Like iroh's `fmt_short`, so both ids display the same way.
+    pub fn fmt_short(&self) -> impl Display {
         format!("{:08x}", self.0 as u32)
     }
 }

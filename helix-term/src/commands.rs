@@ -3426,7 +3426,7 @@ fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
             config.stylize(meta.path.as_deref(), None)
         }),
         PickerColumn::new("id", |meta: &BufferMeta, _| {
-            meta.shared_id.fmt_short().into()
+            meta.shared_id.fmt_short().to_string().into()
         }),
     ];
 
