@@ -2997,7 +2997,17 @@ fn session_join(
         return Ok(());
     }
 
-    cx.editor.p2p.join(args[0].to_string());
+    let join = cx.editor.p2p.join(args[0].to_string());
+    cx.editor.set_status("joining session");
+    cx.jobs.callback(async move {
+        let result = join.await;
+        Ok(job::Callback::Editor(Box::new(
+            move |editor: &mut Editor| match result {
+                Ok(()) => editor.set_status("joined session"),
+                Err(err) => editor.set_error(format!("failed to join session: {err:#}")),
+            },
+        )))
+    });
     Ok(())
 }
 
@@ -3011,7 +3021,15 @@ fn session_share(
     }
 
     let doc_id = doc!(cx.editor).id();
-    cx.editor.share_document(doc_id)
+    cx.editor.share_document(doc_id)?;
+
+    let label = doc!(cx.editor)
+        .shared
+        .as_ref()
+        .expect("document was just shared")
+        .label();
+    cx.editor.set_status(format!("shared {label}"));
+    Ok(())
 }
 
 fn session_files(
@@ -3044,6 +3062,7 @@ fn session_close(
     }
 
     cx.editor.leave_session();
+    cx.editor.set_status("left session");
     Ok(())
 }
 

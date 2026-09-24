@@ -30,14 +30,13 @@ pub enum Event {
     NeighborUp(EndpointId),
     Received(Bytes),
     Quit(String),
-    Error(String),
 }
 
 /// What the editor asks to the service.
 #[derive(Debug)]
 enum Request {
     Ticket(oneshot::Sender<String>),
-    Join(String),
+    Join(String, oneshot::Sender<Result<()>>),
     Leave,
     Broadcast(Bytes),
 }
@@ -74,18 +73,18 @@ impl Service {
         self.id
     }
 
-    /// Resolves to a ticket into the current session, starting one if needed.
+    /// Creates a ticket into the current session, starting one if needed.
     pub fn ticket(&self) -> impl Future<Output = String> + 'static {
         let (tx, rx) = oneshot::channel();
         self.send(Request::Ticket(tx));
         async move { rx.await.expect("actor should reply with a ticket") }
     }
 
-    /// Attempts to join a session.
-    ///
-    /// Errors are notified as events.
-    pub fn join(&self, ticket: String) {
-        self.send(Request::Join(ticket));
+    /// Joins a session.
+    pub fn join(&self, ticket: String) -> impl Future<Output = Result<()>> + 'static {
+        let (tx, rx) = oneshot::channel();
+        self.send(Request::Join(ticket, tx));
+        async move { rx.await.expect("actor should reply") }
     }
 
     /// Leaves the session.
@@ -187,21 +186,23 @@ impl Actor {
     }
 
     async fn handle(&mut self, request: Request) {
-        let result = match request {
+        match request {
             Request::Ticket(chan) => {
                 let _ = chan.send(self.ticket().await);
-                Ok(())
             }
-            Request::Join(ticket) => self.join(&ticket).await,
-            Request::Leave => {
-                self.leave();
-                Ok(())
+            Request::Join(ticket, chan) => {
+                let result = self.join(&ticket).await;
+                if let Err(err) = &result {
+                    log::error!("failed to join session: {err:#}");
+                }
+                let _ = chan.send(result);
             }
-            Request::Broadcast(message) => self.broadcast(message).await,
-        };
-
-        if let Err(err) = result {
-            self.report(format!("{:#}", err));
+            Request::Leave => self.leave(),
+            Request::Broadcast(message) => {
+                if let Err(err) = self.broadcast(message).await {
+                    log::warn!("failed to broadcast: {err:#}");
+                }
+            }
         }
     }
 
@@ -216,6 +217,7 @@ impl Actor {
                     .await
                     .expect("gossip should be running");
                 self.topic = Some((topic, subscription));
+                log::info!("created session {}", topic.fmt_short());
                 topic
             }
         };
@@ -238,6 +240,11 @@ impl Actor {
 
         let bootstrap = addr.id;
         self.addresses.add_endpoint_info(addr);
+        log::info!(
+            "joining session {} through {}",
+            topic.fmt_short(),
+            bootstrap.fmt_short()
+        );
         let subscription = self.gossip.subscribe(topic, vec![bootstrap]).await?;
         self.topic = Some((topic, subscription));
         Ok(())
@@ -248,12 +255,15 @@ impl Actor {
             return Ok(());
         };
 
+        log::trace!("broadcasting {} bytes", message.len());
         subscription.broadcast(message).await?;
         Ok(())
     }
 
     fn leave(&mut self) {
-        self.topic = None;
+        if let Some((topic, _)) = self.topic.take() {
+            log::info!("left session {}", topic.fmt_short());
+        }
     }
 
     async fn next_event(&mut self) -> Option<Result<GossipEvent, ApiError>> {
@@ -273,22 +283,22 @@ impl Actor {
                 log::info!("disconnected from {}", id.fmt_short());
             }
             Some(Ok(GossipEvent::Received(message))) => {
+                log::trace!(
+                    "received {} bytes from {}",
+                    message.content.len(),
+                    message.delivered_from.fmt_short()
+                );
                 let _ = self.events.send(Event::Received(message.content));
             }
             Some(Ok(GossipEvent::Lagged)) => self.quit("fell behind the session".into()),
-            Some(Err(err)) => self.quit(format!("session failed: {:#}", err)),
-            None => self.quit("left the topic".into()),
+            Some(Err(err)) => self.quit(format!("gossip failed: {err:#}")),
+            None => self.quit("gossip stream ended".into()),
         }
     }
 
     fn quit(&mut self, reason: String) {
-        log::error!("{reason}");
-        self.leave();
+        self.topic.take();
+        log::error!("quit session: {reason}");
         let _ = self.events.send(Event::Quit(reason));
-    }
-
-    fn report(&self, error: String) {
-        log::error!("{error}");
-        let _ = self.events.send(Event::Error(error));
     }
 }

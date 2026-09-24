@@ -41,6 +41,13 @@ impl Shared {
             replica: self.replica.encode(),
         }
     }
+
+    pub fn label(&self) -> String {
+        match &self.path {
+            Some(path) => format!("{} ({})", path.display(), self.id.fmt_short()),
+            None => format!("buffer ({})", self.id.fmt_short()),
+        }
+    }
 }
 
 /// Broadcasts local edits to shared documents.
@@ -78,6 +85,7 @@ impl Editor {
         });
 
         let shared = Shared::new(owner, path, doc.text());
+        log::info!("sharing {}", shared.label());
         self.p2p
             .broadcast(wire::encode(&shared.to_message(doc.text())));
         doc.shared = Some(shared);
@@ -100,11 +108,10 @@ impl Editor {
     pub fn handle_p2p_event(&mut self, event: Event) {
         match event {
             Event::NeighborUp(peer) => {
-                self.set_status(format!("connected with {}", peer.fmt_short()));
-
                 // Offer every shared buffer to late joiners.
                 for doc in self.documents() {
                     if let Some(shared) = &doc.shared {
+                        log::debug!("offering {} to {}", shared.label(), peer.fmt_short());
                         self.p2p
                             .broadcast(wire::encode(&shared.to_message(doc.text())));
                     }
@@ -119,13 +126,12 @@ impl Editor {
                     replica,
                 }) => self.open_shared(id, owner, path, &text, &replica),
                 Ok(Message::Edit { id, op }) => self.apply_remote_operation(id, &op),
-                Err(err) => self.set_error(format!("bad message: {err:#}")),
+                Err(err) => log::warn!("dropping malformed message: {err:#}"),
             },
             Event::Quit(reason) => {
                 self.unshare_all_documents();
-                self.set_error(reason);
+                self.set_error(format!("quit session: {reason}"));
             }
-            Event::Error(err) => self.set_error(err),
         }
     }
 
@@ -138,22 +144,20 @@ impl Editor {
         text: &str,
         replica: &[u8],
     ) {
-        // We ignore known shared documents.
         if self.documents().any(|doc| doc.shared_id() == Some(id)) {
+            log::trace!("ignoring known shared buffer {}", id.fmt_short());
             return;
         }
 
         let replica = match Replica::decode(replica) {
             Ok(replica) => replica,
             Err(err) => {
-                self.set_error(format!("failed to join shared buffer: {err:#}"));
+                log::error!(
+                    "failed to decode replica for buffer {}: {err:#}",
+                    id.fmt_short()
+                );
                 return;
             }
-        };
-
-        let status = match &path {
-            Some(path) => format!("{} shared {}", owner.fmt_short(), path.display()),
-            None => format!("{} shared a buffer ({})", owner.fmt_short(), id.fmt_short()),
         };
 
         let doc_id = self.new_file_from_string(Action::Load, text);
@@ -161,14 +165,14 @@ impl Editor {
             .documents
             .get_mut(&doc_id)
             .expect("document should exist");
-        doc.shared = Some(Shared {
+        let shared = Shared {
             id,
             owner,
             path,
             replica,
-        });
-
-        self.set_status(status);
+        };
+        log::info!("{} shared {}", owner.fmt_short(), shared.label());
+        doc.shared = Some(shared);
     }
 
     /// Applies another peer's edit to our copy of the document.
@@ -178,6 +182,7 @@ impl Editor {
             .find(|doc| doc.shared_id() == Some(id))
             .map(Document::id)
         else {
+            log::debug!("dropping edit for unknown shared buffer {}", id.fmt_short());
             return;
         };
 
@@ -189,8 +194,11 @@ impl Editor {
         let Some(mut shared) = doc.shared.take() else {
             return;
         };
-        if let Some(transaction) = shared.replica.from_remote(doc.text(), op) {
-            doc.apply(&transaction, view_id);
+        match shared.replica.from_remote(doc.text(), op) {
+            Some(transaction) => {
+                doc.apply(&transaction, view_id);
+            }
+            None => log::trace!("backlogged edit for {}", id.fmt_short()),
         }
         doc.shared = Some(shared);
     }
