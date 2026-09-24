@@ -2962,7 +2962,7 @@ fn noop(_cx: &mut compositor::Context, _args: Args, _event: PromptEvent) -> anyh
     Ok(())
 }
 
-fn session_new(
+fn session_ticket(
     cx: &mut compositor::Context,
     _args: Args,
     event: PromptEvent,
@@ -4199,10 +4199,10 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         signature: Signature { positionals: (0, None), ..Signature::DEFAULT },
     },
     TypableCommand {
-        name: "session-new",
+        name: "session-ticket",
         aliases: &[],
-        doc: "Create a ticket for the collaborative session and yank it into system clipboard.",
-        fun: session_new,
+        doc: "Yank a ticket into the current collaborative session to the system clipboard, starting one if needed.",
+        fun: session_ticket,
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),
