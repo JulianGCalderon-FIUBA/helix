@@ -18,7 +18,7 @@ use iroh_tickets::{ParseError, Ticket};
 use n0_future::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{
-    mpsc::{unbounded_channel, UnboundedSender},
+    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     oneshot,
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -35,7 +35,7 @@ pub enum Event {
     Error(String),
 }
 
-/// What the editor asks of the node.
+/// What the editor asks of the actor.
 #[derive(Debug)]
 enum Request {
     Ticket(oneshot::Sender<String>),
@@ -54,41 +54,16 @@ pub struct Service {
 impl Service {
     pub fn new() -> (Self, UnboundedReceiverStream<Event>) {
         let (events_tx, events_rx) = unbounded_channel();
-        let (requests_tx, mut requests_rx) = unbounded_channel();
+        let (requests_tx, requests_rx) = unbounded_channel();
 
         let secret_key = SecretKey::generate();
         let id = secret_key.public();
 
         tokio::spawn(async move {
-            let endpoint = Endpoint::builder(presets::N0)
-                .secret_key(secret_key)
-                .bind()
+            Actor::bind(secret_key, events_tx)
                 .await
-                .expect("failed to bind the endpoint");
-            endpoint.online().await;
-            log::info!("listening as {}", endpoint.id().fmt_short());
-
-            let gossip = Gossip::builder()
-                .max_message_size(MAX_MESSAGE_SIZE)
-                .spawn(endpoint.clone());
-            let _router = Router::builder(endpoint.clone())
-                .accept(ALPN, gossip.clone())
-                .spawn();
-
-            let mut node = Node::new(endpoint, gossip, events_tx);
-
-            loop {
-                tokio::select! {
-                    request = requests_rx.recv() => {
-                        // Every Service handle is gone, so the editor is too.
-                        let Some(request) = request else {
-                            break;
-                        };
-                        node.handle(request).await;
-                    }
-                    event = node.next_event() => node.on_event(event),
-                }
-            }
+                .run(requests_rx)
+                .await;
         });
 
         let service = Service {
@@ -106,7 +81,7 @@ impl Service {
     pub fn ticket(&self) -> impl Future<Output = String> + 'static {
         let (tx, rx) = oneshot::channel();
         self.send(Request::Ticket(tx));
-        async move { rx.await.expect("node should reply with a ticket") }
+        async move { rx.await.expect("actor should reply with a ticket") }
     }
 
     /// Attempts to join a session.
@@ -128,7 +103,7 @@ impl Service {
     fn send(&self, request: Request) {
         self.requests
             .send(request)
-            .expect("p2p node should be running");
+            .expect("p2p actor should be running");
     }
 }
 
@@ -153,10 +128,14 @@ impl Ticket for SessionTicket {
     }
 }
 
-/// Our endpoint in the session's gossip swarm.
-struct Node {
+/// The [`Service`]'s internal actor, owning our endpoint and the session's
+/// gossip topic. Runs in its own task, so none of this needs locking.
+struct Actor {
     endpoint: Endpoint,
     gossip: Gossip,
+    /// Accepts incoming connections and hands the ones speaking gossip's ALPN
+    /// to gossip. Kept alive by this field: dropping it stops accepting.
+    _router: Router,
     /// Addresses learned from tickets for gossip to dial,
     /// as it dials bootstrap peers by id alone.
     addresses: MemoryLookup,
@@ -165,8 +144,28 @@ struct Node {
     topic: Option<(TopicId, GossipTopic)>,
 }
 
-impl Node {
-    fn new(endpoint: Endpoint, gossip: Gossip, events: UnboundedSender<Event>) -> Self {
+impl Actor {
+    /// Binds the endpoint and starts gossip on it.
+    async fn bind(secret_key: SecretKey, events: UnboundedSender<Event>) -> Self {
+        // N0 uses n0's public relays and address lookup, so peers can reach
+        // each other behind NATs without any configuration.
+        let endpoint = Endpoint::builder(presets::N0)
+            .secret_key(secret_key)
+            .bind()
+            .await
+            .expect("failed to bind the endpoint");
+        // Wait for a relay connection, so the address we put in tickets is
+        // one peers can actually reach.
+        endpoint.online().await;
+        log::info!("listening as {}", endpoint.id().fmt_short());
+
+        let gossip = Gossip::builder()
+            .max_message_size(MAX_MESSAGE_SIZE)
+            .spawn(endpoint.clone());
+        let router = Router::builder(endpoint.clone())
+            .accept(ALPN, gossip.clone())
+            .spawn();
+
         // Registered once, and filled in as we join sessions.
         let addresses = MemoryLookup::new();
         endpoint
@@ -177,9 +176,26 @@ impl Node {
         Self {
             endpoint,
             gossip,
+            _router: router,
             addresses,
             events,
             topic: None,
+        }
+    }
+
+    /// Handles requests and gossip events until the editor is gone.
+    async fn run(mut self, mut requests: UnboundedReceiver<Request>) {
+        loop {
+            tokio::select! {
+                request = requests.recv() => {
+                    // Every Service handle is gone, so the editor is too.
+                    let Some(request) = request else {
+                        break;
+                    };
+                    self.handle(request).await;
+                }
+                event = self.next_event() => self.on_event(event),
+            }
         }
     }
 
