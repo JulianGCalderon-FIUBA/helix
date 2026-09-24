@@ -173,23 +173,16 @@ impl Editor {
 
     /// Applies another peer's edit to our copy of the document.
     fn apply_remote_operation(&mut self, id: SharedId, op: &RemoteOperation) {
-        let view_id = self
-            .tree
-            .traverse()
-            .find(|(_, view)| {
-                self.documents.get(&view.doc).and_then(Document::shared_id) == Some(id)
-            })
-            .map_or(self.tree.focus, |(view_id, _)| view_id);
-
-        let Some(doc) = self
-            .documents
-            .values_mut()
+        let Some(doc_id) = self
+            .documents()
             .find(|doc| doc.shared_id() == Some(id))
+            .map(Document::id)
         else {
             return;
         };
 
-        doc.ensure_view_init(view_id);
+        let view_id = self.get_synced_view_id(doc_id);
+        let doc = doc_mut!(self, &doc_id);
 
         // Taken while applying, so the hook sees an unshared document and
         // doesn't broadcast the remote edit back.
