@@ -1,12 +1,4 @@
-//! What it means to share documents in a session, on top of [`net`](super::net).
-//!
-//! Sharing a buffer broadcasts a Share, and every peer opens its own copy.
-//! From then on each peer broadcasts its edits, and applies everyone else's
-//! through its replica, so all copies converge to the same text.
-//!
-//! This is the only p2p layer that touches the editor. The handlers are
-//! `Editor` methods, like the debugger's `handle_debugger_message`, so
-//! helix-term only routes events here and calls in from commands.
+//! Collaboration session layer, on top of the networking layer.
 
 use std::path::PathBuf;
 
@@ -21,17 +13,11 @@ use super::{
 };
 use crate::{editor::Action, events::DocumentDidChange, Document, DocumentId, Editor};
 
-/// A document shared in the session, and who shared it.
-///
-/// Lives on `Document::shared`. Kept apart from the replica, so the CRDT
-/// knows nothing about sessions.
+/// A document shared in the session, with metadata.
 pub struct Shared {
     pub id: SharedId,
-    /// Who shared it first. Only informational, as every peer can edit.
     pub owner: EndpointId,
-    /// The path relative to the owner's workspace, as their absolute path
-    /// means nothing on another machine. Only informational too: the copy
-    /// peers open is a scratch buffer, not a file.
+    /// The path relative to the owner's workspace.
     pub path: Option<PathBuf>,
     pub replica: Replica,
 }
@@ -46,9 +32,6 @@ impl Shared {
         }
     }
 
-    /// The Share that lets a peer open this document, as of `text`.
-    ///
-    /// Takes the text from the caller, since it lives on the Document.
     pub fn to_message(&self, text: &Rope) -> Message {
         Message::Share {
             id: self.id,
@@ -61,20 +44,8 @@ impl Shared {
 }
 
 /// Broadcasts local edits to shared documents.
-///
-/// A hook, rather than calls at each place that edits, since every edit ends
-/// up in DocumentDidChange. It takes its own handle to the service, as hooks
-/// cannot reach the editor.
 pub fn register_hooks(p2p: Service) {
     register_hook!(move |event: &mut DocumentDidChange<'_>| {
-        // Remote edits came from the session already, so sending them back
-        // would echo them forever.
-        //
-        // Ghost edits are completion previews. Each is reverted, again as a
-        // ghost edit, before the next real one, so skipping both keeps the
-        // replica in step with the text. A remote edit arriving while a
-        // preview shows is the exception: cola's offsets do not count the
-        // preview's text, so the edit can land in the wrong place.
         if event.ghost_transaction || event.remote_transaction {
             return Ok(());
         }
@@ -82,8 +53,6 @@ pub fn register_hooks(p2p: Service) {
             return Ok(());
         };
 
-        // One message per operation, the simplest mapping. A change with
-        // several edits, like one with multiple cursors, sends several.
         let id = shared.id;
         for op in shared.replica.from_local(event.changes) {
             p2p.broadcast(wire::encode(&Message::Edit { id, op }));
@@ -95,28 +64,19 @@ pub fn register_hooks(p2p: Service) {
 
 impl Editor {
     /// Shares a document with the session.
-    ///
-    /// Works outside of a session too: the Share is dropped, but the document
-    /// is offered again to every peer that connects later.
     pub fn share(&mut self, doc_id: DocumentId) -> Result<()> {
         let owner = self.p2p.id();
         let doc = self
             .documents
             .get_mut(&doc_id)
             .expect("document should exist");
-        // A second Share would give it a new id, splitting peers between two
-        // copies of the same buffer.
         ensure!(doc.shared.is_none(), "buffer is already shared");
 
-        // Peers see the path relative to the workspace,
-        // or in full when the file is outside of it.
         let path = doc.path().map(|path| {
             let (workspace, _) = helix_loader::find_workspace();
             path.strip_prefix(&workspace).unwrap_or(path).to_path_buf()
         });
 
-        // The replica starts from the text as it is now, which is exactly what
-        // the Share carries, so both sides agree on where edits land.
         let shared = Shared::new(owner, path, doc.text());
         self.p2p
             .broadcast(wire::encode(&shared.to_message(doc.text())));
@@ -124,34 +84,25 @@ impl Editor {
         Ok(())
     }
 
-    /// Leaves the session at the user's request.
     pub fn leave_session(&mut self) {
         self.p2p.close();
         self.unshare_all();
     }
 
-    /// Without a session there are no peers, so nothing is shared any more.
-    ///
-    /// The buffers stay open as plain buffers. Joining another session starts
-    /// over, since these replicas have no meaning there.
+    /// Unshares all documents, but keeps the buffers.
     fn unshare_all(&mut self) {
         for doc in self.documents_mut() {
             doc.shared = None;
         }
     }
 
-    /// Reacts to the node. Called by the application for every net event.
+    /// Called by the application for every net event.
     pub fn handle_p2p_event(&mut self, event: Event) {
         match event {
             Event::NeighborUp(peer) => {
                 self.set_status(format!("connected with {}", peer.fmt_short()));
 
-                // Offer every shared buffer to late joiners, as they missed
-                // the original Shares. Sent to the whole session, since
-                // gossip has no direct messages, and the Share carries the
-                // current text and replica, so edits made before the
-                // newcomer joined are included. Peers that have the buffer
-                // already ignore it.
+                // Offer every shared buffer to late joiners.
                 for doc in self.documents() {
                     if let Some(shared) = &doc.shared {
                         self.p2p
@@ -190,8 +141,7 @@ impl Editor {
         text: &str,
         replica: &[u8],
     ) {
-        // Everyone re-shares their buffers to each newcomer, so we see the
-        // same Share many times.
+        // We ignore known shared documents.
         if self.documents().any(|doc| doc.shared_id() == Some(id)) {
             return;
         }
@@ -209,11 +159,12 @@ impl Editor {
             None => format!("{} shared a buffer ({})", owner.fmt_short(), id.fmt_short()),
         };
 
-        // A new scratch buffer rather than the file at `path`: our copy of
-        // that file, if we even have one, may differ. Action::Load opens it
-        // in the background, so a Share does not steal the focus.
         let doc_id = self.new_file_from_string(Action::Load, text);
-        self.documents.get_mut(&doc_id).unwrap().shared = Some(Shared {
+        let doc = self
+            .documents
+            .get_mut(&doc_id)
+            .expect("document should exist");
+        doc.shared = Some(Shared {
             id,
             owner,
             path,
@@ -225,9 +176,6 @@ impl Editor {
 
     /// Applies another peer's edit to our copy of the document.
     fn apply_remote(&mut self, id: SharedId, op: &RemoteOperation) {
-        // Document::apply goes through a view. Prefer one showing the
-        // document, and fall back to the focused view when it is not visible
-        // anywhere.
         let view_id = self
             .tree
             .traverse()
@@ -236,8 +184,6 @@ impl Editor {
             })
             .map_or(self.tree.focus, |(view_id, _)| view_id);
 
-        // An Edit for a document we do not have: its Share was lost, or has
-        // not arrived yet. Nothing to apply it to, so it is dropped.
         let Some(doc) = self
             .documents
             .values_mut()
@@ -246,17 +192,11 @@ impl Editor {
             return;
         };
 
-        // apply reads the document's selection for view_id, which a
-        // buffer that view has never displayed does not have yet.
         doc.ensure_view_init(view_id);
 
-        // Taken out so the replica can change while we read the text. The
-        // text is private to Document, so we cannot borrow both fields at
-        // once from here.
         let Some(mut shared) = doc.shared.take() else {
             return;
         };
-        // None when cola backlogged the op, see Replica::from_remote.
         if let Some(transaction) = shared.replica.from_remote(doc.text(), op) {
             doc.apply(&transaction, view_id);
         }

@@ -2971,15 +2971,11 @@ fn session_new(
         return Ok(());
     }
 
-    // The node may have to create the session first, so the ticket arrives
-    // asynchronously, and is handled in a job instead of blocking the editor.
     let ticket = cx.editor.p2p.ticket();
     cx.jobs.callback(async move {
         let ticket = ticket.await;
         Ok(job::Callback::EditorCompositor(Box::new(
             move |editor: &mut Editor, _: &mut Compositor| {
-                // The system clipboard, so the ticket can be pasted wherever
-                // it gets sent to the other peer.
                 let register = '+';
                 match editor.registers.write(register, vec![ticket]) {
                     Ok(_) => editor.set_status(format!("yanked ticket to register {register}",)),

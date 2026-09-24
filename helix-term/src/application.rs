@@ -131,8 +131,6 @@ impl Application {
             handlers,
             workspace_trust,
         );
-        // Registered here, not with the other helix-view hooks, since those
-        // run before the editor, and so the node, exist.
         p2p::session::register_hooks(editor.p2p.clone());
         Self::load_configured_theme(&mut editor, &config.load(), &mut terminal, theme_mode);
 
@@ -684,8 +682,6 @@ impl Application {
                 }
             }
             EditorEvent::P2pEvent(event) => {
-                // All p2p logic lives in helix-view, which needs nothing from
-                // the compositor. Unlike LSP, there is nothing to do here.
                 self.editor.handle_p2p_event(event);
                 helix_event::request_redraw();
             }
