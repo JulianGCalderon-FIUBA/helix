@@ -184,8 +184,8 @@ impl Editor {
         let view_id = self.get_synced_view_id(doc_id);
         let doc = doc_mut!(self, &doc_id);
 
-        // Taken while applying, so the hook sees an unshared document and
-        // doesn't broadcast the remote edit back.
+        // By taking out the shared document, we ensure that
+        // the remote edit is not broadcasted again.
         let Some(mut shared) = doc.shared.take() else {
             return;
         };

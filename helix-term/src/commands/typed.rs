@@ -4197,7 +4197,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-ticket",
         aliases: &[],
-        doc: "Yank a ticket into the current collaborative session to the system clipboard, starting one if needed.",
+        doc: "Create a ticket for the collaborative session and yank it into system clipboard.",
         fun: session_ticket,
         completer: CommandCompleter::none(),
         signature: Signature {

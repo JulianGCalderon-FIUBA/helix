@@ -17,7 +17,6 @@ impl SharedId {
         Self(rand::random())
     }
 
-    /// Like iroh's `fmt_short`, so both ids display the same way.
     pub fn fmt_short(&self) -> impl Display {
         format!("{:08x}", self.0 as u32)
     }
