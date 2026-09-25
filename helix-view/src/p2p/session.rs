@@ -7,7 +7,7 @@ use helix_core::Rope;
 use helix_event::register_hook;
 
 use super::{
-    crdt::{RemoteOperation, Replica},
+    crdt::Replica,
     net::{EndpointId, Event, Service},
     wire::{self, Message, SharedId},
 };
@@ -32,12 +32,11 @@ impl Shared {
         }
     }
 
-    pub fn to_message(&self, text: &Rope) -> Message {
+    pub fn to_message(&self) -> Message {
         Message::Share {
             id: self.id,
             owner: self.owner,
             path: self.path.clone(),
-            text: text.to_string(),
             replica: self.replica.encode(),
         }
     }
@@ -60,10 +59,11 @@ pub fn register_hooks(p2p: Service) {
             return Ok(());
         };
 
-        let id = shared.id;
-        for op in shared.replica.from_local(event.changes) {
-            p2p.broadcast(wire::encode(&Message::Edit { id, op }));
-        }
+        let update = shared.replica.from_local(event.changes);
+        p2p.broadcast(wire::encode(&Message::Edit {
+            id: shared.id,
+            update,
+        }));
 
         Ok(())
     });
@@ -86,8 +86,7 @@ impl Editor {
 
         let shared = Shared::new(owner, path, doc.text());
         log::info!("sharing {}", shared.label());
-        self.p2p
-            .broadcast(wire::encode(&shared.to_message(doc.text())));
+        self.p2p.broadcast(wire::encode(&shared.to_message()));
         doc.shared = Some(shared);
         Ok(())
     }
@@ -112,8 +111,7 @@ impl Editor {
                 for doc in self.documents() {
                     if let Some(shared) = &doc.shared {
                         log::debug!("offering {} to {}", shared.label(), peer.fmt_short());
-                        self.p2p
-                            .broadcast(wire::encode(&shared.to_message(doc.text())));
+                        self.p2p.broadcast(wire::encode(&shared.to_message()));
                     }
                 }
             }
@@ -122,10 +120,9 @@ impl Editor {
                     id,
                     owner,
                     path,
-                    text,
                     replica,
-                }) => self.open_shared(id, owner, path, &text, &replica),
-                Ok(Message::Edit { id, op }) => self.apply_remote_operation(id, &op),
+                }) => self.open_shared(id, owner, path, &replica),
+                Ok(Message::Edit { id, update }) => self.apply_remote_update(id, &update),
                 Err(err) => log::warn!("dropping malformed message: {err:#}"),
             },
             Event::Quit(reason) => {
@@ -141,7 +138,6 @@ impl Editor {
         id: SharedId,
         owner: EndpointId,
         path: Option<PathBuf>,
-        text: &str,
         replica: &[u8],
     ) {
         if self.documents().any(|doc| doc.shared_id() == Some(id)) {
@@ -160,7 +156,7 @@ impl Editor {
             }
         };
 
-        let doc_id = self.new_file_from_string(Action::Load, text);
+        let doc_id = self.new_file_from_string(Action::Load, &replica.text());
         let doc = self
             .documents
             .get_mut(&doc_id)
@@ -176,7 +172,7 @@ impl Editor {
     }
 
     /// Applies another peer's edit to our copy of the document.
-    fn apply_remote_operation(&mut self, id: SharedId, op: &RemoteOperation) {
+    fn apply_remote_update(&mut self, id: SharedId, update: &[u8]) {
         let Some(doc_id) = self
             .documents()
             .find(|doc| doc.shared_id() == Some(id))
@@ -194,11 +190,12 @@ impl Editor {
         let Some(mut shared) = doc.shared.take() else {
             return;
         };
-        match shared.replica.from_remote(doc.text(), op) {
-            Some(transaction) => {
+        match shared.replica.from_remote(doc.text(), update) {
+            Ok(Some(transaction)) => {
                 doc.apply(&transaction, view_id);
             }
-            None => log::trace!("backlogged edit for {}", id.fmt_short()),
+            Ok(None) => log::trace!("pending edit for {}", id.fmt_short()),
+            Err(err) => log::warn!("dropping edit for {}: {err:#}", id.fmt_short()),
         }
         doc.shared = Some(shared);
     }
