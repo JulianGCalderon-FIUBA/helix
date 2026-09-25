@@ -1,86 +1,110 @@
 //! Bridges Helix's ChangeSets to CRDT operations.
 
 use anyhow::Result;
-use cola::{EncodedReplica, Insertion, ReplicaId};
 use helix_core::{ChangeSet, Operation, Rope, Transaction};
-use serde::{Deserialize, Serialize};
+use loro::{event::Diff, ExportMode, LoroDoc, LoroText, TextDelta};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum RemoteOperation {
-    Insert { insertion: Insertion, text: String },
-    Delete(cola::Deletion),
-}
-
-fn replica_id() -> ReplicaId {
-    rand::random_range(1..=ReplicaId::MAX)
-}
+const TEXT: &str = "text";
 
 pub struct Replica {
-    replica: cola::Replica,
+    doc: LoroDoc,
+    text: LoroText,
 }
 
 impl Replica {
     pub fn new(text: &Rope) -> Self {
-        Self {
-            replica: cola::Replica::new(replica_id(), text.len_chars()),
-        }
+        let doc = LoroDoc::new();
+        let replica = Self {
+            text: doc.get_text(TEXT),
+            doc,
+        };
+        replica
+            .text
+            .insert(0, &text.to_string())
+            .expect("insert into empty text should succeed");
+        replica.doc.commit();
+        replica
     }
 
-    pub fn decode(encoded: &[u8]) -> Result<Self> {
-        let encoded = EncodedReplica::from_bytes(encoded);
-        let replica = cola::Replica::decode(replica_id(), &encoded)?;
-        Ok(Self { replica })
+    /// Decodes a snapshot. The replica gets its own random peer id.
+    pub fn decode(snapshot: &[u8]) -> Result<Self> {
+        let doc = LoroDoc::from_snapshot(snapshot)?;
+        Ok(Self {
+            text: doc.get_text(TEXT),
+            doc,
+        })
     }
 
     pub fn encode(&self) -> Vec<u8> {
-        self.replica.encode().as_bytes().to_vec()
+        self.doc
+            .export(ExportMode::Snapshot)
+            .expect("snapshot should export")
     }
 
-    /// Translate local transactions to CRDT operations.
-    pub fn from_local(&mut self, changes: &ChangeSet) -> Vec<RemoteOperation> {
-        let mut ops = Vec::new();
+    pub fn text(&self) -> String {
+        self.text.to_string()
+    }
+
+    /// Translate local transactions to a CRDT update.
+    pub fn from_local(&mut self, changes: &ChangeSet) -> Vec<u8> {
+        let before = self.doc.oplog_vv();
         let mut pos = 0;
 
         for op in changes.changes() {
             match op {
                 Operation::Retain(n) => pos += n,
                 Operation::Insert(text) => {
-                    let len = text.chars().count();
-                    ops.push(RemoteOperation::Insert {
-                        insertion: self.replica.inserted(pos, len),
-                        text: text.to_string(),
-                    });
-                    pos += len;
+                    self.text
+                        .insert(pos, text)
+                        .expect("insert should be in bounds");
+                    pos += text.chars().count();
                 }
                 Operation::Delete(n) => {
-                    ops.push(RemoteOperation::Delete(self.replica.deleted(pos..pos + n)));
+                    self.text
+                        .delete(pos, *n)
+                        .expect("delete should be in bounds");
+                }
+            }
+        }
+        self.doc.commit();
+
+        self.doc
+            .export(ExportMode::updates(&before))
+            .expect("update should export")
+    }
+
+    /// Translate a CRDT update to a local transaction.
+    ///
+    /// Returns None when the update changed nothing visible, for example
+    /// when Loro keeps it pending until its dependencies arrive.
+    pub fn from_remote(&mut self, text: &Rope, update: &[u8]) -> Result<Option<Transaction>> {
+        let before = self.doc.state_frontiers();
+        self.doc.import(update)?;
+        let after = self.doc.state_frontiers();
+
+        let mut changes = Vec::new();
+        let mut pos = 0;
+        for (_, diff) in self.doc.diff(&before, &after)?.iter() {
+            let Diff::Text(deltas) = diff else {
+                continue;
+            };
+            for delta in deltas {
+                match delta {
+                    TextDelta::Retain { retain, .. } => pos += retain,
+                    TextDelta::Insert { insert, .. } => {
+                        changes.push((pos, pos, Some(insert.as_str().into())))
+                    }
+                    TextDelta::Delete { delete } => {
+                        changes.push((pos, pos + delete, None));
+                        pos += delete;
+                    }
                 }
             }
         }
 
-        ops
-    }
-
-    /// Translate CRDT operations to local transactions.
-    ///
-    /// Returns None when Cola backlogged the operation.
-    pub fn from_remote(&mut self, text: &Rope, op: &RemoteOperation) -> Option<Transaction> {
-        let transaction = match op {
-            RemoteOperation::Insert { insertion, text: s } => {
-                let at = self.replica.integrate_insertion(insertion)?;
-                Transaction::change(text, [(at, at, Some(s.as_str().into()))].into_iter())
-            }
-            RemoteOperation::Delete(deletion) => {
-                let ranges = self.replica.integrate_deletion(deletion);
-                if ranges.is_empty() {
-                    return None;
-                }
-                Transaction::delete(
-                    text,
-                    ranges.into_iter().map(|range| (range.start, range.end)),
-                )
-            }
-        };
-        Some(transaction)
+        if changes.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(Transaction::change(text, changes.into_iter())))
     }
 }
