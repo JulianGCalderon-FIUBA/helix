@@ -32,6 +32,7 @@ impl From<TopicId> for SharedId {
     }
 }
 
+/// Messages on a document's topic are about that document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
     Share {
@@ -43,16 +44,13 @@ pub enum Message {
         id: SharedId,
     },
     SnapshotRequest {
-        id: SharedId,
         nonce: u64,
     },
     Snapshot {
-        id: SharedId,
         nonce: u64,
         replica: Vec<u8>,
     },
     Edit {
-        id: SharedId,
         update: Vec<u8>,
     },
 }

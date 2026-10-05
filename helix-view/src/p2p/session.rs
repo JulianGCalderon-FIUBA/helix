@@ -61,10 +61,7 @@ pub fn register_hooks(p2p: Service) {
         let update = shared.replica.from_local(event.changes);
         p2p.broadcast(
             Topic::Other(shared.meta.id.topic()),
-            wire::encode(&Message::Edit {
-                id: shared.meta.id,
-                update,
-            }),
+            wire::encode(&Message::Edit { update }),
         );
 
         Ok(())
@@ -200,29 +197,8 @@ impl Editor {
                     self.request_snapshot(id);
                 }
             }
-            Event::Received(_, bytes) => match wire::decode(&bytes) {
-                Ok(Message::Share { id, owner, path }) => {
-                    let meta = SharedMeta { id, owner, path };
-                    if self.shared_files.insert(id, meta).is_none() {
-                        log::info!("{} shared {}", owner.fmt_short(), id.fmt_short());
-                    }
-                }
-                Ok(Message::Unshare { id }) => {
-                    self.shared_files.remove(&id);
-                    if let Some(shared) = self.stop_syncing_document(id) {
-                        self.set_status(format!("owner stopped sharing {}", shared.meta.label()));
-                    }
-                }
-                Ok(Message::SnapshotRequest { id, .. }) => {
-                    // Only the owner answers, so that a request gets a single snapshot.
-                    let me = self.p2p.id();
-                    let shared = self.shared_document(id).and_then(|doc| doc.shared.as_ref());
-                    if let Some(shared) = shared.filter(|shared| shared.meta.owner == me) {
-                        self.send_snapshot(shared);
-                    }
-                }
-                Ok(Message::Snapshot { id, replica, .. }) => self.apply_remote_update(id, &replica),
-                Ok(Message::Edit { id, update }) => self.apply_remote_update(id, &update),
+            Event::Received(topic, bytes) => match wire::decode(&bytes) {
+                Ok(message) => self.handle_message(topic, message),
                 Err(err) => log::warn!("dropping malformed message: {err:#}"),
             },
             Event::Lost(Topic::Session, reason) => {
@@ -238,10 +214,43 @@ impl Editor {
         }
     }
 
+    fn handle_message(&mut self, topic: Topic, message: Message) {
+        match (topic, message) {
+            (_, Message::Share { id, owner, path }) => {
+                let meta = SharedMeta { id, owner, path };
+                if self.shared_files.insert(id, meta).is_none() {
+                    log::info!("{} shared {}", owner.fmt_short(), id.fmt_short());
+                }
+            }
+            (_, Message::Unshare { id }) => {
+                self.shared_files.remove(&id);
+                if let Some(shared) = self.stop_syncing_document(id) {
+                    self.set_status(format!("owner stopped sharing {}", shared.meta.label()));
+                }
+            }
+            (Topic::Other(topic), Message::SnapshotRequest { .. }) => {
+                // Only the owner answers, so that a request gets a single snapshot.
+                let me = self.p2p.id();
+                let shared = self
+                    .shared_document(SharedId::from(topic))
+                    .and_then(|doc| doc.shared.as_ref());
+                if let Some(shared) = shared.filter(|shared| shared.meta.owner == me) {
+                    self.send_snapshot(shared);
+                }
+            }
+            (Topic::Other(topic), Message::Snapshot { replica, .. }) => {
+                self.apply_remote_update(SharedId::from(topic), &replica)
+            }
+            (Topic::Other(topic), Message::Edit { update }) => {
+                self.apply_remote_update(SharedId::from(topic), &update)
+            }
+            (Topic::Session, _) => log::warn!("dropping document message sent to the session"),
+        }
+    }
+
     fn request_snapshot(&self, id: SharedId) {
         log::debug!("requesting snapshot of {}", id.fmt_short());
         let message = Message::SnapshotRequest {
-            id,
             nonce: rand::random(),
         };
         self.p2p
@@ -251,7 +260,6 @@ impl Editor {
     fn send_snapshot(&self, shared: &Shared) {
         log::debug!("sending snapshot of {}", shared.meta.label());
         let message = Message::Snapshot {
-            id: shared.meta.id,
             nonce: rand::random(),
             replica: shared.replica.encode(),
         };
