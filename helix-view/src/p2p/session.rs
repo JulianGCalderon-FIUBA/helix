@@ -180,7 +180,7 @@ impl Editor {
 
     /// Stops syncing all documents, but keeps the buffers.
     fn stop_syncing_all_documents(&mut self) {
-        let ids: Vec<_> = self.shared_files.keys().copied().collect();
+        let ids: Vec<_> = self.documents().filter_map(Document::shared_id).collect();
         for id in ids {
             self.stop_syncing_document(id);
         }
