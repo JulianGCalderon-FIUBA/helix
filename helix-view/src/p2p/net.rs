@@ -211,7 +211,6 @@ impl Actor {
                     };
                     self.handle(request).await;
                 }
-                // Disabled while we are in no topic.
                 Some((topic, event)) = self.receivers.next() => self.on_event(topic, event),
             }
         }

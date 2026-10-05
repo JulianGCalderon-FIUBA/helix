@@ -37,20 +37,25 @@ impl From<TopicId> for SharedId {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
-    /// Sent on the session topic.
     Share {
         id: SharedId,
         owner: EndpointId,
         path: Option<PathBuf>,
     },
-    /// Sent on the session topic, by the owner, when it stops sharing.
-    Unshare { id: SharedId },
-    /// Sent on the document's topic, by peers waiting for its content.
-    SnapshotRequest { id: SharedId },
-    /// Sent on the document's topic, by the owner, answering a request.
-    Snapshot { id: SharedId, replica: Vec<u8> },
-    /// Sent on the document's topic.
-    Edit { id: SharedId, update: Vec<u8> },
+    Unshare {
+        id: SharedId,
+    },
+    SnapshotRequest {
+        id: SharedId,
+    },
+    Snapshot {
+        id: SharedId,
+        replica: Vec<u8>,
+    },
+    Edit {
+        id: SharedId,
+        update: Vec<u8>,
+    },
 }
 
 pub fn encode(message: &Message) -> Bytes {

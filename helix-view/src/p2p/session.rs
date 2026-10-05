@@ -143,7 +143,6 @@ impl Editor {
             snapshot_requested: false,
         };
         log::info!("opening {}", shared.meta.label());
-        // The owner is the one peer we know is in the topic.
         self.p2p.subscribe(id.topic(), vec![shared.meta.owner]);
 
         let doc_id = self.new_file(action);
@@ -152,7 +151,6 @@ impl Editor {
     }
 
     pub fn leave_session(&mut self) {
-        // Unshare first, so the broadcasts go out before the node leaves.
         self.unshare_all_documents();
         self.p2p.leave();
     }
@@ -221,8 +219,6 @@ impl Editor {
                     }
                 }
                 Ok(Message::SnapshotRequest { id }) => self.send_snapshot(id),
-                // A snapshot is just a larger update, and importing what we
-                // already have is a no-op.
                 Ok(Message::Snapshot { id, replica }) => self.apply_remote_update(id, &replica),
                 Ok(Message::Edit { id, update }) => self.apply_remote_update(id, &update),
                 Err(err) => log::warn!("dropping malformed message: {err:#}"),

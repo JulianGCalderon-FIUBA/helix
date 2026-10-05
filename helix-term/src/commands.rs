@@ -3425,7 +3425,7 @@ fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
         },
     )
     .with_preview(|editor, meta| {
-        // Only buffers we opened have content to preview.
+        // Only buffers we subscribed to have preview.
         let doc = editor.shared_document(meta.id)?;
         let lines = doc.selections().values().next().map(|selection| {
             let cursor_line = selection.primary().cursor_line(doc.text().slice(..));
