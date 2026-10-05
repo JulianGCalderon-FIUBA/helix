@@ -192,13 +192,11 @@ impl Editor {
     pub fn handle_p2p_event(&mut self, event: Event) {
         match event {
             Event::NeighborUp(Topic::Session, peer) => {
-                // Announce our documents to late joiners.
-                let me = self.p2p.id();
+                // Announce every document we know of to late joiners, not only
+                // ours: the owner only notices a joiner it connects to directly.
                 for meta in self.shared_files.values() {
-                    if meta.owner == me {
-                        log::debug!("announcing {} to {}", meta.label(), peer.fmt_short());
-                        self.announce(meta);
-                    }
+                    log::debug!("announcing {} to {}", meta.label(), peer.fmt_short());
+                    self.announce(meta);
                 }
             }
             Event::NeighborUp(Topic::Other(topic), _) => {
