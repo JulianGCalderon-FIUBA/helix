@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{ensure, Result};
+use anyhow::{bail, ensure, Result};
 use helix_core::{Rope, Transaction};
 use helix_event::register_hook;
 
@@ -12,6 +12,13 @@ use super::{
     wire::{self, Message, SharedId},
 };
 use crate::{editor::Action, events::DocumentDidChange, Document, DocumentId, Editor};
+
+/// A document someone announced to the session, which we may not have opened.
+pub struct SharedFile {
+    pub owner: EndpointId,
+    /// The path relative to the owner's workspace.
+    pub path: Option<PathBuf>,
+}
 
 /// A document shared in the session, with metadata.
 pub struct Shared {
@@ -29,15 +36,6 @@ impl Shared {
             owner,
             path,
             replica: Replica::new(text),
-        }
-    }
-
-    pub fn to_message(&self) -> Message {
-        Message::Share {
-            id: self.id,
-            owner: self.owner,
-            path: self.path.clone(),
-            replica: self.replica.encode(),
         }
     }
 
@@ -91,9 +89,57 @@ impl Editor {
         log::info!("sharing {}", shared.label());
         // Peers that open the document join its topic through us.
         self.p2p.subscribe(shared.id.topic(), Vec::new());
-        self.p2p
-            .broadcast(Topic::Session, wire::encode(&shared.to_message()));
+        let id = shared.id;
+        let file = SharedFile {
+            owner,
+            path: shared.path.clone(),
+        };
         doc.shared = Some(shared);
+        self.announce(id, &file);
+        self.shared_files.insert(id, file);
+        Ok(())
+    }
+
+    /// Tells the session about a document, but not what it contains.
+    fn announce(&self, id: SharedId, file: &SharedFile) {
+        let message = Message::Share {
+            id,
+            owner: file.owner,
+            path: file.path.clone(),
+        };
+        self.p2p.broadcast(Topic::Session, wire::encode(&message));
+    }
+
+    /// Opens our copy of a shared document, or switches to it if open.
+    ///
+    /// The buffer starts empty, and fills in once the owner answers
+    /// with a snapshot.
+    pub fn open_shared(&mut self, id: SharedId, action: Action) -> Result<()> {
+        let open = self
+            .documents()
+            .find(|doc| doc.shared_id() == Some(id))
+            .map(Document::id);
+        if let Some(doc_id) = open {
+            self.switch(doc_id, action);
+            return Ok(());
+        }
+        let Some(file) = self.shared_files.get(&id) else {
+            bail!("{} is no longer shared", id.fmt_short());
+        };
+
+        let shared = Shared {
+            id,
+            owner: file.owner,
+            path: file.path.clone(),
+            replica: Replica::empty(),
+        };
+        log::info!("opening {}", shared.label());
+        // The owner is the one peer we know is in the topic. Once we
+        // connect to someone there, we ask for a snapshot.
+        self.p2p.subscribe(id.topic(), vec![shared.owner]);
+
+        let doc_id = self.new_file(action);
+        doc_mut!(self, &doc_id).shared = Some(shared);
         Ok(())
     }
 
@@ -104,6 +150,7 @@ impl Editor {
 
     /// Unshares all documents, but keeps the buffers.
     fn unshare_all_documents(&mut self) {
+        self.shared_files.clear();
         for doc in self.documents_mut() {
             doc.shared = None;
         }
@@ -112,23 +159,42 @@ impl Editor {
     /// Called by the application for every p2p event.
     pub fn handle_p2p_event(&mut self, event: Event) {
         match event {
-            Event::NeighborUp(_, peer) => {
-                // Offer every shared buffer to late joiners.
-                for doc in self.documents() {
-                    if let Some(shared) = &doc.shared {
-                        log::debug!("offering {} to {}", shared.label(), peer.fmt_short());
-                        self.p2p
-                            .broadcast(Topic::Session, wire::encode(&shared.to_message()));
+            Event::NeighborUp(Topic::Session, peer) => {
+                // Announce our documents to late joiners.
+                let me = self.p2p.id();
+                for (id, file) in &self.shared_files {
+                    if file.owner == me {
+                        log::debug!("announcing {} to {}", id.fmt_short(), peer.fmt_short());
+                        self.announce(*id, file);
                     }
                 }
             }
+            Event::NeighborUp(Topic::Other(topic), _) => {
+                // We are connected to the document's topic, so the request
+                // reaches the owner. Asking on every new neighbor also
+                // catches us up on edits we missed while disconnected.
+                let me = self.p2p.id();
+                if let Some(shared) = self.documents().find_map(|doc| {
+                    let shared = doc.shared.as_ref()?;
+                    (shared.id.topic() == topic && shared.owner != me).then_some(shared)
+                }) {
+                    log::debug!("requesting snapshot of {}", shared.label());
+                    let message = Message::SnapshotRequest { id: shared.id };
+                    self.p2p
+                        .broadcast(Topic::Other(topic), wire::encode(&message));
+                }
+            }
             Event::Received(_, bytes) => match wire::decode(&bytes) {
-                Ok(Message::Share {
-                    id,
-                    owner,
-                    path,
-                    replica,
-                }) => self.open_shared(id, owner, path, &replica),
+                Ok(Message::Share { id, owner, path }) => {
+                    let file = SharedFile { owner, path };
+                    if self.shared_files.insert(id, file).is_none() {
+                        log::info!("{} shared {}", owner.fmt_short(), id.fmt_short());
+                    }
+                }
+                Ok(Message::SnapshotRequest { id }) => self.send_snapshot(id),
+                // A snapshot is just a larger update, and importing what we
+                // already have is a no-op.
+                Ok(Message::Snapshot { id, replica }) => self.apply_remote_update(id, &replica),
                 Ok(Message::Edit { id, update }) => self.apply_remote_update(id, &update),
                 Err(err) => log::warn!("dropping malformed message: {err:#}"),
             },
@@ -149,45 +215,26 @@ impl Editor {
         }
     }
 
-    /// Opens our own copy of a document another peer shared.
-    fn open_shared(
-        &mut self,
-        id: SharedId,
-        owner: EndpointId,
-        path: Option<PathBuf>,
-        replica: &[u8],
-    ) {
-        if self.documents().any(|doc| doc.shared_id() == Some(id)) {
-            log::trace!("ignoring known shared buffer {}", id.fmt_short());
+    /// Answers a snapshot request, if the document is ours.
+    ///
+    /// Only the owner answers, so that a request gets a single snapshot.
+    fn send_snapshot(&self, id: SharedId) {
+        let me = self.p2p.id();
+        let Some(shared) = self
+            .documents()
+            .filter_map(|doc| doc.shared.as_ref())
+            .find(|shared| shared.id == id && shared.owner == me)
+        else {
             return;
-        }
-
-        let replica = match Replica::decode(replica) {
-            Ok(replica) => replica,
-            Err(err) => {
-                log::error!(
-                    "failed to decode replica for buffer {}: {err:#}",
-                    id.fmt_short()
-                );
-                return;
-            }
         };
 
-        let doc_id = self.new_file_from_string(Action::Load, &replica.text());
-        let doc = self
-            .documents
-            .get_mut(&doc_id)
-            .expect("document should exist");
-        let shared = Shared {
+        log::debug!("sending snapshot of {}", shared.label());
+        let message = Message::Snapshot {
             id,
-            owner,
-            path,
-            replica,
+            replica: shared.replica.encode(),
         };
-        log::info!("{} shared {}", owner.fmt_short(), shared.label());
-        // The owner is the one peer we know is in the topic.
-        self.p2p.subscribe(id.topic(), vec![owner]);
-        doc.shared = Some(shared);
+        self.p2p
+            .broadcast(Topic::Other(id.topic()), wire::encode(&message));
     }
 
     /// Applies another peer's edit to our copy of the document.

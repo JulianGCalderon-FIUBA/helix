@@ -26,22 +26,19 @@ impl Replica {
         replica
     }
 
-    pub fn decode(snapshot: &[u8]) -> Result<Self> {
-        let doc = LoroDoc::from_snapshot(snapshot)?;
-        Ok(Self {
+    /// A replica with no content yet, to fill in with a snapshot.
+    pub fn empty() -> Self {
+        let doc = LoroDoc::new();
+        Self {
             text: doc.get_text(TEXT_ID),
             doc,
-        })
+        }
     }
 
     pub fn encode(&self) -> Vec<u8> {
         self.doc
             .export(ExportMode::Snapshot)
             .expect("export should not fail")
-    }
-
-    pub fn text(&self) -> String {
-        self.text.to_string()
     }
 
     /// Translate local transactions to a CRDT update.

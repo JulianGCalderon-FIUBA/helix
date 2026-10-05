@@ -36,8 +36,11 @@ pub enum Message {
         id: SharedId,
         owner: EndpointId,
         path: Option<PathBuf>,
-        replica: Vec<u8>,
     },
+    /// Sent on the document's topic, by peers waiting for its content.
+    SnapshotRequest { id: SharedId },
+    /// Sent on the document's topic, by the owner, answering a request.
+    Snapshot { id: SharedId, replica: Vec<u8> },
     /// Sent on the document's topic.
     Edit { id: SharedId, update: Vec<u8> },
 }
