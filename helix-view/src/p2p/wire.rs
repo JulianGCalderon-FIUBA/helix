@@ -29,6 +29,12 @@ impl SharedId {
     }
 }
 
+impl From<TopicId> for SharedId {
+    fn from(topic: TopicId) -> Self {
+        Self(topic)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
     /// Sent on the session topic.

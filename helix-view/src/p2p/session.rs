@@ -145,38 +145,46 @@ impl Editor {
     }
 
     pub fn leave_session(&mut self) {
-        // Leaving drops every topic, so peers would keep listing our
-        // documents. The broadcasts go out before the node leaves.
-        let me = self.p2p.id();
-        for meta in self.shared_files.values() {
-            if meta.owner == me {
-                self.p2p.broadcast(
-                    Topic::Session,
-                    wire::encode(&Message::Unshare { id: meta.id }),
-                );
-            }
-        }
-        self.p2p.leave();
+        // Unshare first, so the broadcasts go out before the node leaves.
         self.unshare_all_documents();
+        self.p2p.leave();
     }
 
     /// Leaves a closed document's topic. If the document is ours,
-    /// nobody can open it anymore, so we unshare it from everyone.
+    /// nobody can open it anymore, so we unshare it.
     fn close_shared(&mut self, shared: Shared) {
         log::info!("closing {}", shared.meta.label());
-        self.p2p.unsubscribe(shared.meta.id.topic());
         if shared.meta.owner == self.p2p.id() {
-            self.shared_files.remove(&shared.meta.id);
-            let message = Message::Unshare { id: shared.meta.id };
+            self.unshare(shared.meta.id);
+        } else {
+            self.p2p.unsubscribe(shared.meta.id.topic());
+        }
+    }
+
+    /// Stops sharing a document. Our copy, if open, stays as a regular
+    /// buffer, and is returned.
+    ///
+    /// If the document is ours, peers are told to unshare it as well.
+    fn unshare(&mut self, id: SharedId) -> Option<Shared> {
+        let meta = self.shared_files.remove(&id);
+        let shared = self
+            .documents_mut()
+            .find(|doc| doc.shared_id() == Some(id))
+            .and_then(|doc| doc.shared.take());
+        self.p2p.unsubscribe(id.topic());
+
+        if meta.is_some_and(|meta| meta.owner == self.p2p.id()) {
+            let message = Message::Unshare { id };
             self.p2p.broadcast(Topic::Session, wire::encode(&message));
         }
+        shared
     }
 
     /// Unshares all documents, but keeps the buffers.
     fn unshare_all_documents(&mut self) {
-        self.shared_files.clear();
-        for doc in self.documents_mut() {
-            doc.shared = None;
+        let ids: Vec<_> = self.shared_files.keys().copied().collect();
+        for id in ids {
+            self.unshare(id);
         }
     }
 
@@ -215,7 +223,11 @@ impl Editor {
                         log::info!("{} shared {}", owner.fmt_short(), id.fmt_short());
                     }
                 }
-                Ok(Message::Unshare { id }) => self.unshare(id),
+                Ok(Message::Unshare { id }) => {
+                    if let Some(shared) = self.unshare(id) {
+                        self.set_status(format!("owner stopped sharing {}", shared.meta.label()));
+                    }
+                }
                 Ok(Message::SnapshotRequest { id }) => self.send_snapshot(id),
                 // A snapshot is just a larger update, and importing what we
                 // already have is a no-op.
@@ -229,28 +241,10 @@ impl Editor {
             }
             Event::Quit(Topic::Other(topic), reason) => {
                 // Our copy no longer syncs, so it stops being shared.
-                let shared = self
-                    .documents_mut()
-                    .find(|doc| doc.shared_id().map(|id| id.topic()) == Some(topic))
-                    .and_then(|doc| doc.shared.take());
-                if let Some(shared) = shared {
+                if let Some(shared) = self.unshare(SharedId::from(topic)) {
                     self.set_error(format!("stopped sharing {}: {reason}", shared.meta.label()));
                 }
             }
-        }
-    }
-
-    /// Forgets a document its owner stopped sharing. Our copy, if any,
-    /// stays open as a regular buffer.
-    fn unshare(&mut self, id: SharedId) {
-        self.shared_files.remove(&id);
-        let shared = self
-            .documents_mut()
-            .find(|doc| doc.shared_id() == Some(id))
-            .and_then(|doc| doc.shared.take());
-        if let Some(shared) = shared {
-            self.p2p.unsubscribe(id.topic());
-            self.set_status(format!("owner stopped sharing {}", shared.meta.label()));
         }
     }
 
