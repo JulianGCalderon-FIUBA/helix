@@ -92,8 +92,9 @@ impl Editor {
             path,
         };
         log::info!("sharing {}", meta.label());
-        // Peers that open the document join its topic through us.
-        self.p2p.subscribe(meta.id.topic(), Vec::new());
+        // Peers that open the document join its topic through us, so there
+        // is nobody to wait for. The subscription is requested either way.
+        drop(self.p2p.subscribe(meta.id.topic(), Vec::new()));
         doc.shared = Some(Shared {
             meta: meta.clone(),
             replica: Replica::new(doc.text()),
@@ -135,9 +136,20 @@ impl Editor {
             replica: Replica::empty(),
         };
         log::info!("opening {}", shared.meta.label());
-        // The owner is the one peer we know is in the topic. Once we
-        // connect to someone there, we ask for a snapshot.
-        self.p2p.subscribe(id.topic(), vec![shared.meta.owner]);
+        // The owner is the one peer we know is in the topic. We can only
+        // ask for a snapshot once we connect to someone there.
+        let joined = self.p2p.subscribe(id.topic(), vec![shared.meta.owner]);
+        let p2p = self.p2p.clone();
+        tokio::spawn(async move {
+            match joined.await {
+                Ok(()) => {
+                    log::debug!("requesting snapshot of {}", id.fmt_short());
+                    let message = Message::SnapshotRequest { id };
+                    p2p.broadcast(Topic::Other(id.topic()), wire::encode(&message));
+                }
+                Err(err) => log::warn!("failed to open {}: {err:#}", id.fmt_short()),
+            }
+        });
 
         let doc_id = self.new_file(action);
         doc_mut!(self, &doc_id).shared = Some(shared);
@@ -199,21 +211,7 @@ impl Editor {
                     self.announce(meta);
                 }
             }
-            Event::NeighborUp(Topic::Other(topic), _) => {
-                // We are connected to the document's topic, so the request
-                // reaches the owner. Asking on every new neighbor also
-                // catches us up on edits we missed while disconnected.
-                let me = self.p2p.id();
-                if let Some(shared) = self.documents().find_map(|doc| {
-                    let shared = doc.shared.as_ref()?;
-                    (shared.meta.id.topic() == topic && shared.meta.owner != me).then_some(shared)
-                }) {
-                    log::debug!("requesting snapshot of {}", shared.meta.label());
-                    let message = Message::SnapshotRequest { id: shared.meta.id };
-                    self.p2p
-                        .broadcast(Topic::Other(topic), wire::encode(&message));
-                }
-            }
+            Event::NeighborUp(Topic::Other(_), _) => {}
             Event::Received(_, bytes) => match wire::decode(&bytes) {
                 Ok(Message::Share { id, owner, path }) => {
                     let meta = SharedMeta { id, owner, path };

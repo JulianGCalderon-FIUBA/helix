@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, future::Future};
 
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use bytes::Bytes;
 pub use iroh::EndpointId;
 use iroh::{
@@ -49,7 +49,7 @@ enum Request {
     Ticket(oneshot::Sender<String>),
     Join(String, oneshot::Sender<Result<()>>),
     Leave,
-    Subscribe(TopicId, Vec<EndpointId>),
+    Subscribe(TopicId, Vec<EndpointId>, oneshot::Sender<()>),
     Unsubscribe(TopicId),
     Broadcast(Topic, Bytes),
 }
@@ -105,8 +105,18 @@ impl Service {
         self.send(Request::Leave);
     }
 
-    pub fn subscribe(&self, topic: TopicId, bootstrap: Vec<EndpointId>) {
-        self.send(Request::Subscribe(topic, bootstrap));
+    /// Resolves once we connect to a peer in the topic.
+    pub fn subscribe(
+        &self,
+        topic: TopicId,
+        bootstrap: Vec<EndpointId>,
+    ) -> impl Future<Output = Result<()>> + 'static {
+        let (tx, rx) = oneshot::channel();
+        self.send(Request::Subscribe(topic, bootstrap, tx));
+        async move {
+            rx.await
+                .context("left the topic before connecting to anyone")
+        }
     }
 
     pub fn unsubscribe(&self, topic: TopicId) {
@@ -162,6 +172,8 @@ struct Actor {
     /// Every topic we are in, including the session's.
     senders: HashMap<Topic, GossipSender>,
     receivers: StreamMap<Topic, Events>,
+    /// Subscriptions waiting for their first neighbor.
+    joining: HashMap<TopicId, oneshot::Sender<()>>,
 }
 
 impl Actor {
@@ -196,6 +208,7 @@ impl Actor {
             session: None,
             senders: HashMap::new(),
             receivers: StreamMap::new(),
+            joining: HashMap::new(),
         }
     }
 
@@ -229,9 +242,14 @@ impl Actor {
                 let _ = chan.send(result);
             }
             Request::Leave => self.leave(),
-            Request::Subscribe(topic, bootstrap) => {
-                if let Err(err) = self.subscribe(Topic::Other(topic), topic, bootstrap).await {
-                    log::error!("failed to subscribe to {}: {err:#}", topic.fmt_short());
+            Request::Subscribe(topic, bootstrap, chan) => {
+                match self.subscribe(Topic::Other(topic), topic, bootstrap).await {
+                    Ok(()) => {
+                        self.joining.insert(topic, chan);
+                    }
+                    Err(err) => {
+                        log::error!("failed to subscribe to {}: {err:#}", topic.fmt_short());
+                    }
                 }
             }
             Request::Unsubscribe(topic) => self.unsubscribe(Topic::Other(topic)),
@@ -303,6 +321,9 @@ impl Actor {
     fn unsubscribe(&mut self, topic: Topic) {
         self.senders.remove(&topic);
         self.receivers.remove(&topic);
+        if let Topic::Other(id) = topic {
+            self.joining.remove(&id);
+        }
     }
 
     async fn broadcast(&mut self, topic: Topic, message: Bytes) -> Result<()> {
@@ -318,6 +339,7 @@ impl Actor {
     fn leave(&mut self) {
         self.senders.clear();
         self.receivers.clear();
+        self.joining.clear();
         if let Some(topic) = self.session.take() {
             log::info!("left session {}", topic.fmt_short());
         }
@@ -327,6 +349,11 @@ impl Actor {
         match event {
             Some(Ok(GossipEvent::NeighborUp(id))) => {
                 log::info!("connected to {} in {topic:?}", id.fmt_short());
+                if let Topic::Other(topic) = topic {
+                    if let Some(chan) = self.joining.remove(&topic) {
+                        let _ = chan.send(());
+                    }
+                }
                 let _ = self.events.send(Event::NeighborUp(topic, id));
             }
             Some(Ok(GossipEvent::NeighborDown(id))) => {
