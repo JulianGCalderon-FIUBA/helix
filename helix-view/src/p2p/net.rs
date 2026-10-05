@@ -40,7 +40,6 @@ pub enum Topic {
 pub enum Event {
     NeighborUp(Topic, EndpointId),
     Received(Topic, Bytes),
-    /// We are no longer in the topic, without being asked to leave it.
     Quit(Topic, String),
 }
 
@@ -101,14 +100,11 @@ impl Service {
         async move { rx.await.expect("actor should reply") }
     }
 
-    /// Leaves the session, and every other topic with it.
+    /// Leaves the session.
     pub fn leave(&self) {
         self.send(Request::Leave);
     }
 
-    /// Joins a topic other than the session's, through the bootstrap peers.
-    ///
-    /// Without bootstrap peers, we wait for others to join through us.
     pub fn subscribe(&self, topic: TopicId, bootstrap: Vec<EndpointId>) {
         self.send(Request::Subscribe(topic, bootstrap));
     }
