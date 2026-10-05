@@ -72,6 +72,15 @@ pub fn register_hooks(p2p: Service) {
 }
 
 impl Editor {
+    /// Our open copy of a shared document.
+    pub fn shared_document(&self, id: SharedId) -> Option<&Document> {
+        self.documents().find(|doc| doc.shared_id() == Some(id))
+    }
+
+    pub fn shared_document_mut(&mut self, id: SharedId) -> Option<&mut Document> {
+        self.documents_mut().find(|doc| doc.shared_id() == Some(id))
+    }
+
     /// Shares a document with the session.
     pub fn share_document(&mut self, doc_id: DocumentId) -> Result<()> {
         let owner = self.p2p.id();
@@ -119,11 +128,7 @@ impl Editor {
     /// The buffer starts empty, and fills in once the owner answers
     /// with a snapshot.
     pub fn open_shared(&mut self, id: SharedId, action: Action) -> Result<()> {
-        let open = self
-            .documents()
-            .find(|doc| doc.shared_id() == Some(id))
-            .map(Document::id);
-        if let Some(doc_id) = open {
+        if let Some(doc_id) = self.shared_document(id).map(Document::id) {
             self.switch(doc_id, action);
             return Ok(());
         }
@@ -180,8 +185,7 @@ impl Editor {
     fn unshare(&mut self, id: SharedId) -> Option<Shared> {
         let meta = self.shared_files.remove(&id);
         let shared = self
-            .documents_mut()
-            .find(|doc| doc.shared_id() == Some(id))
+            .shared_document_mut(id)
             .and_then(|doc| doc.shared.take());
         self.p2p.unsubscribe(id.topic());
 
@@ -248,11 +252,10 @@ impl Editor {
     ///
     /// Only the owner answers, so that a request gets a single snapshot.
     fn send_snapshot(&self, id: SharedId) {
-        let me = self.p2p.id();
         let Some(shared) = self
-            .documents()
-            .filter_map(|doc| doc.shared.as_ref())
-            .find(|shared| shared.meta.id == id && shared.meta.owner == me)
+            .shared_document(id)
+            .and_then(|doc| doc.shared.as_ref())
+            .filter(|shared| shared.meta.owner == self.p2p.id())
         else {
             return;
         };
@@ -268,11 +271,7 @@ impl Editor {
 
     /// Applies another peer's edit to our copy of the document.
     fn apply_remote_update(&mut self, id: SharedId, update: &[u8]) {
-        let Some(doc_id) = self
-            .documents()
-            .find(|doc| doc.shared_id() == Some(id))
-            .map(Document::id)
-        else {
+        let Some(doc_id) = self.shared_document(id).map(Document::id) else {
             log::debug!("dropping edit for unknown shared buffer {}", id.fmt_short());
             return;
         };
