@@ -206,7 +206,16 @@ impl Editor {
                 }
             }
             Event::NeighborUp(Topic::Other(topic), _) => {
-                self.request_snapshot(SharedId::from(topic))
+                let id = SharedId::from(topic);
+                let shared = self
+                    .shared_document_mut(id)
+                    .and_then(|doc| doc.shared.as_mut());
+                // A request sent before we connect to anyone reaches nobody.
+                // Later neighbors joined after us, so we only ask the first.
+                if let Some(shared) = shared.filter(|shared| !shared.snapshot_requested) {
+                    shared.snapshot_requested = true;
+                    self.request_snapshot(id);
+                }
             }
             Event::Received(_, bytes) => match wire::decode(&bytes) {
                 Ok(Message::Share { id, owner, path }) => {
@@ -221,7 +230,14 @@ impl Editor {
                         self.set_status(format!("owner stopped sharing {}", shared.meta.label()));
                     }
                 }
-                Ok(Message::SnapshotRequest { id }) => self.send_snapshot(id),
+                Ok(Message::SnapshotRequest { id }) => {
+                    // Only the owner answers, so that a request gets a single snapshot.
+                    let me = self.p2p.id();
+                    let shared = self.shared_document(id).and_then(|doc| doc.shared.as_ref());
+                    if let Some(shared) = shared.filter(|shared| shared.meta.owner == me) {
+                        self.send_snapshot(shared);
+                    }
+                }
                 Ok(Message::Snapshot { id, replica }) => self.apply_remote_update(id, &replica),
                 Ok(Message::Edit { id, update }) => self.apply_remote_update(id, &update),
                 Err(err) => log::warn!("dropping malformed message: {err:#}"),
@@ -240,44 +256,21 @@ impl Editor {
         }
     }
 
-    /// Asks for a snapshot of a document we opened, the first time we
-    /// connect to someone in its topic. Broadcasting earlier reaches nobody.
-    fn request_snapshot(&mut self, id: SharedId) {
-        let Some(shared) = self
-            .shared_document_mut(id)
-            .and_then(|doc| doc.shared.as_mut())
-        else {
-            return;
-        };
-        if std::mem::replace(&mut shared.snapshot_requested, true) {
-            return;
-        }
-
+    fn request_snapshot(&self, id: SharedId) {
         log::debug!("requesting snapshot of {}", id.fmt_short());
         let message = Message::SnapshotRequest { id };
         self.p2p
             .broadcast(Topic::Other(id.topic()), wire::encode(&message));
     }
 
-    /// Answers a snapshot request, if the document is ours.
-    ///
-    /// Only the owner answers, so that a request gets a single snapshot.
-    fn send_snapshot(&self, id: SharedId) {
-        let Some(shared) = self
-            .shared_document(id)
-            .and_then(|doc| doc.shared.as_ref())
-            .filter(|shared| shared.meta.owner == self.p2p.id())
-        else {
-            return;
-        };
-
+    fn send_snapshot(&self, shared: &Shared) {
         log::debug!("sending snapshot of {}", shared.meta.label());
         let message = Message::Snapshot {
-            id,
+            id: shared.meta.id,
             replica: shared.replica.encode(),
         };
         self.p2p
-            .broadcast(Topic::Other(id.topic()), wire::encode(&message));
+            .broadcast(Topic::Other(shared.meta.id.topic()), wire::encode(&message));
     }
 
     /// Applies another peer's edit to our copy of the document.
