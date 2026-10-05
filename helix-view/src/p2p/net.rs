@@ -40,7 +40,7 @@ pub enum Topic {
 pub enum Event {
     NeighborUp(Topic, EndpointId),
     Received(Topic, Bytes),
-    Quit(Topic, String),
+    Lost(Topic, String),
 }
 
 /// What the editor asks to the service.
@@ -344,20 +344,20 @@ impl Actor {
                 );
                 let _ = self.events.send(Event::Received(topic, message.content));
             }
-            Some(Ok(GossipEvent::Lagged)) => self.quit(topic, "fell behind".into()),
-            Some(Err(err)) => self.quit(topic, format!("gossip failed: {err:#}")),
-            None => self.quit(topic, "gossip stream ended".into()),
+            Some(Ok(GossipEvent::Lagged)) => self.lose(topic, "fell behind".into()),
+            Some(Err(err)) => self.lose(topic, format!("gossip failed: {err:#}")),
+            None => self.lose(topic, "gossip stream ended".into()),
         }
     }
 
     /// Losing the session topic means losing the whole session.
-    fn quit(&mut self, topic: Topic, reason: String) {
+    fn lose(&mut self, topic: Topic, reason: String) {
         if topic == Topic::Session {
             self.leave();
         } else {
             self.unsubscribe(topic);
         }
-        log::error!("quit {topic:?}: {reason}");
-        let _ = self.events.send(Event::Quit(topic, reason));
+        log::error!("lost {topic:?}: {reason}");
+        let _ = self.events.send(Event::Lost(topic, reason));
     }
 }

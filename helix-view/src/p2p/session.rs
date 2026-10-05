@@ -223,11 +223,11 @@ impl Editor {
                 Ok(Message::Edit { id, update }) => self.apply_remote_update(id, &update),
                 Err(err) => log::warn!("dropping malformed message: {err:#}"),
             },
-            Event::Quit(Topic::Session, reason) => {
+            Event::Lost(Topic::Session, reason) => {
                 self.unshare_all_documents();
-                self.set_error(format!("quit session: {reason}"));
+                self.set_error(format!("lost session: {reason}"));
             }
-            Event::Quit(Topic::Other(topic), reason) => {
+            Event::Lost(Topic::Other(topic), reason) => {
                 // Our copy no longer syncs, so it stops being shared. Others'
                 // copies may still sync, so the document can be reopened.
                 let shared = self
