@@ -8,7 +8,7 @@ use helix_event::register_hook;
 
 use super::{
     crdt::Replica,
-    net::{EndpointId, Event, Service},
+    net::{EndpointId, Event, Service, Topic},
     wire::{self, Message, SharedId},
 };
 use crate::{editor::Action, events::DocumentDidChange, Document, DocumentId, Editor};
@@ -60,10 +60,13 @@ pub fn register_hooks(p2p: Service) {
         };
 
         let update = shared.replica.from_local(event.changes);
-        p2p.broadcast(wire::encode(&Message::Edit {
-            id: shared.id,
-            update,
-        }));
+        p2p.broadcast(
+            Topic::Session,
+            wire::encode(&Message::Edit {
+                id: shared.id,
+                update,
+            }),
+        );
 
         Ok(())
     });
@@ -86,7 +89,8 @@ impl Editor {
 
         let shared = Shared::new(owner, path, doc.text());
         log::info!("sharing {}", shared.label());
-        self.p2p.broadcast(wire::encode(&shared.to_message()));
+        self.p2p
+            .broadcast(Topic::Session, wire::encode(&shared.to_message()));
         doc.shared = Some(shared);
         Ok(())
     }
@@ -106,16 +110,17 @@ impl Editor {
     /// Called by the application for every p2p event.
     pub fn handle_p2p_event(&mut self, event: Event) {
         match event {
-            Event::NeighborUp(peer) => {
+            Event::NeighborUp(_, peer) => {
                 // Offer every shared buffer to late joiners.
                 for doc in self.documents() {
                     if let Some(shared) = &doc.shared {
                         log::debug!("offering {} to {}", shared.label(), peer.fmt_short());
-                        self.p2p.broadcast(wire::encode(&shared.to_message()));
+                        self.p2p
+                            .broadcast(Topic::Session, wire::encode(&shared.to_message()));
                     }
                 }
             }
-            Event::Received(bytes) => match wire::decode(&bytes) {
+            Event::Received(_, bytes) => match wire::decode(&bytes) {
                 Ok(Message::Share {
                     id,
                     owner,
@@ -125,7 +130,7 @@ impl Editor {
                 Ok(Message::Edit { id, update }) => self.apply_remote_update(id, &update),
                 Err(err) => log::warn!("dropping malformed message: {err:#}"),
             },
-            Event::Quit(reason) => {
+            Event::Quit(_, reason) => {
                 self.unshare_all_documents();
                 self.set_error(format!("quit session: {reason}"));
             }

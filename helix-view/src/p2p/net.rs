@@ -1,6 +1,6 @@
 //! The transport layer moves opaque bytes between peers.
 
-use std::future::Future;
+use std::{collections::HashMap, future::Future};
 
 use anyhow::{ensure, Result};
 use bytes::Bytes;
@@ -9,27 +9,39 @@ use iroh::{
     address_lookup::memory::MemoryLookup, endpoint::presets, protocol::Router, Endpoint,
     EndpointAddr, SecretKey,
 };
+pub use iroh_gossip::TopicId;
 use iroh_gossip::{
-    api::{ApiError, Event as GossipEvent, GossipTopic},
-    Gossip, TopicId, ALPN,
+    api::{ApiError, Event as GossipEvent, GossipSender},
+    Gossip, ALPN,
 };
 use iroh_tickets::{ParseError, Ticket};
-use n0_future::StreamExt;
+use n0_future::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     oneshot,
 };
-use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::{wrappers::UnboundedReceiverStream, StreamMap};
 
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
+
+/// A gossip swarm we can be in.
+///
+/// The session topic is the one tickets invite into. Other topics are
+/// joined by id, and only by the peers that care about them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Topic {
+    Session,
+    Other(TopicId),
+}
 
 /// What the service tells the editor.
 #[derive(Debug)]
 pub enum Event {
-    NeighborUp(EndpointId),
-    Received(Bytes),
-    Quit(String),
+    NeighborUp(Topic, EndpointId),
+    Received(Topic, Bytes),
+    /// We are no longer in the topic, without being asked to leave it.
+    Quit(Topic, String),
 }
 
 /// What the editor asks to the service.
@@ -38,7 +50,9 @@ enum Request {
     Ticket(oneshot::Sender<String>),
     Join(String, oneshot::Sender<Result<()>>),
     Leave,
-    Broadcast(Bytes),
+    Subscribe(TopicId, Vec<EndpointId>),
+    Unsubscribe(TopicId),
+    Broadcast(Topic, Bytes),
 }
 
 #[derive(Clone)]
@@ -87,14 +101,25 @@ impl Service {
         async move { rx.await.expect("actor should reply") }
     }
 
-    /// Leaves the session.
+    /// Leaves the session, and every other topic with it.
     pub fn leave(&self) {
         self.send(Request::Leave);
     }
 
-    /// Sends to every member of the session. Delivery is best-effort.
-    pub fn broadcast(&self, message: Bytes) {
-        self.send(Request::Broadcast(message));
+    /// Joins a topic other than the session's, through the bootstrap peers.
+    ///
+    /// Without bootstrap peers, we wait for others to join through us.
+    pub fn subscribe(&self, topic: TopicId, bootstrap: Vec<EndpointId>) {
+        self.send(Request::Subscribe(topic, bootstrap));
+    }
+
+    pub fn unsubscribe(&self, topic: TopicId) {
+        self.send(Request::Unsubscribe(topic));
+    }
+
+    /// Sends to every member of a topic. Delivery is best-effort.
+    pub fn broadcast(&self, topic: Topic, message: Bytes) {
+        self.send(Request::Broadcast(topic, message));
     }
 
     /// Sends a request to the internal actor.
@@ -124,6 +149,10 @@ impl Ticket for SessionTicket {
     }
 }
 
+/// A topic's events, followed by a final `None` once the subscription
+/// ends. StreamMap drops finished streams silently, and we want to know.
+type Events = stream::Boxed<Option<Result<GossipEvent, ApiError>>>;
+
 /// The Service's internal actor
 struct Actor {
     endpoint: Endpoint,
@@ -132,8 +161,11 @@ struct Actor {
     /// Addresses learned from tickets.
     addresses: MemoryLookup,
     events: UnboundedSender<Event>,
-    /// The swarm we are in, if any.
-    topic: Option<(TopicId, GossipTopic)>,
+    /// The session's topic id, if we are in one.
+    session: Option<TopicId>,
+    /// Every topic we are in, including the session's.
+    senders: HashMap<Topic, GossipSender>,
+    receivers: StreamMap<Topic, Events>,
 }
 
 impl Actor {
@@ -165,7 +197,9 @@ impl Actor {
             _router: router,
             addresses,
             events,
-            topic: None,
+            session: None,
+            senders: HashMap::new(),
+            receivers: StreamMap::new(),
         }
     }
 
@@ -180,7 +214,8 @@ impl Actor {
                     };
                     self.handle(request).await;
                 }
-                event = self.next_event() => self.on_event(event),
+                // Disabled while we are in no topic.
+                Some((topic, event)) = self.receivers.next() => self.on_event(topic, event),
             }
         }
     }
@@ -198,8 +233,14 @@ impl Actor {
                 let _ = chan.send(result);
             }
             Request::Leave => self.leave(),
-            Request::Broadcast(message) => {
-                if let Err(err) = self.broadcast(message).await {
+            Request::Subscribe(topic, bootstrap) => {
+                if let Err(err) = self.subscribe(Topic::Other(topic), topic, bootstrap).await {
+                    log::error!("failed to subscribe to {}: {err:#}", topic.fmt_short());
+                }
+            }
+            Request::Unsubscribe(topic) => self.unsubscribe(Topic::Other(topic)),
+            Request::Broadcast(topic, message) => {
+                if let Err(err) = self.broadcast(topic, message).await {
                     log::warn!("failed to broadcast: {err:#}");
                 }
             }
@@ -207,16 +248,14 @@ impl Actor {
     }
 
     async fn ticket(&mut self) -> String {
-        let topic = match &self.topic {
-            Some((topic, _)) => *topic,
+        let topic = match self.session {
+            Some(topic) => topic,
             None => {
                 let topic = TopicId::from_bytes(rand::random());
-                let subscription = self
-                    .gossip
-                    .subscribe(topic, Vec::new())
+                self.subscribe(Topic::Session, topic, Vec::new())
                     .await
                     .expect("gossip should be running");
-                self.topic = Some((topic, subscription));
+                self.session = Some(topic);
                 log::info!("created session {}", topic.fmt_short());
                 topic
             }
@@ -236,7 +275,7 @@ impl Actor {
             addr.id != self.endpoint.id(),
             "cannot join your own session"
         );
-        ensure!(self.topic.is_none(), "already in a session");
+        ensure!(self.session.is_none(), "already in a session");
 
         let bootstrap = addr.id;
         self.addresses.add_endpoint_info(addr);
@@ -245,60 +284,80 @@ impl Actor {
             topic.fmt_short(),
             bootstrap.fmt_short()
         );
-        let subscription = self.gossip.subscribe(topic, vec![bootstrap]).await?;
-        self.topic = Some((topic, subscription));
+        self.subscribe(Topic::Session, topic, vec![bootstrap])
+            .await?;
+        self.session = Some(topic);
         Ok(())
     }
 
-    async fn broadcast(&mut self, message: Bytes) -> Result<()> {
-        let Some((_, subscription)) = &mut self.topic else {
+    async fn subscribe(
+        &mut self,
+        topic: Topic,
+        id: TopicId,
+        bootstrap: Vec<EndpointId>,
+    ) -> Result<()> {
+        let (sender, receiver) = self.gossip.subscribe(id, bootstrap).await?.split();
+        let events = receiver.map(Some).chain(stream::once(None)).boxed();
+        self.senders.insert(topic, sender);
+        self.receivers.insert(topic, events);
+        Ok(())
+    }
+
+    /// Dropping both halves of a subscription leaves the topic.
+    fn unsubscribe(&mut self, topic: Topic) {
+        self.senders.remove(&topic);
+        self.receivers.remove(&topic);
+    }
+
+    async fn broadcast(&mut self, topic: Topic, message: Bytes) -> Result<()> {
+        let Some(sender) = self.senders.get(&topic) else {
             return Ok(());
         };
 
-        log::trace!("broadcasting {} bytes", message.len());
-        subscription.broadcast(message).await?;
+        log::trace!("broadcasting {} bytes to {topic:?}", message.len());
+        sender.broadcast(message).await?;
         Ok(())
     }
 
     fn leave(&mut self) {
-        if let Some((topic, _)) = self.topic.take() {
+        self.senders.clear();
+        self.receivers.clear();
+        if let Some(topic) = self.session.take() {
             log::info!("left session {}", topic.fmt_short());
         }
     }
 
-    async fn next_event(&mut self) -> Option<Result<GossipEvent, ApiError>> {
-        match &mut self.topic {
-            Some((_, subscription)) => subscription.next().await,
-            None => std::future::pending().await,
-        }
-    }
-
-    fn on_event(&mut self, event: Option<Result<GossipEvent, ApiError>>) {
+    fn on_event(&mut self, topic: Topic, event: Option<Result<GossipEvent, ApiError>>) {
         match event {
             Some(Ok(GossipEvent::NeighborUp(id))) => {
-                log::info!("connected to {}", id.fmt_short());
-                let _ = self.events.send(Event::NeighborUp(id));
+                log::info!("connected to {} in {topic:?}", id.fmt_short());
+                let _ = self.events.send(Event::NeighborUp(topic, id));
             }
             Some(Ok(GossipEvent::NeighborDown(id))) => {
-                log::info!("disconnected from {}", id.fmt_short());
+                log::info!("disconnected from {} in {topic:?}", id.fmt_short());
             }
             Some(Ok(GossipEvent::Received(message))) => {
                 log::trace!(
-                    "received {} bytes from {}",
+                    "received {} bytes from {} in {topic:?}",
                     message.content.len(),
                     message.delivered_from.fmt_short()
                 );
-                let _ = self.events.send(Event::Received(message.content));
+                let _ = self.events.send(Event::Received(topic, message.content));
             }
-            Some(Ok(GossipEvent::Lagged)) => self.quit("fell behind the session".into()),
-            Some(Err(err)) => self.quit(format!("gossip failed: {err:#}")),
-            None => self.quit("gossip stream ended".into()),
+            Some(Ok(GossipEvent::Lagged)) => self.quit(topic, "fell behind".into()),
+            Some(Err(err)) => self.quit(topic, format!("gossip failed: {err:#}")),
+            None => self.quit(topic, "gossip stream ended".into()),
         }
     }
 
-    fn quit(&mut self, reason: String) {
-        self.topic.take();
-        log::error!("quit session: {reason}");
-        let _ = self.events.send(Event::Quit(reason));
+    /// Losing the session topic means losing the whole session.
+    fn quit(&mut self, topic: Topic, reason: String) {
+        if topic == Topic::Session {
+            self.leave();
+        } else {
+            self.unsubscribe(topic);
+        }
+        log::error!("quit {topic:?}: {reason}");
+        let _ = self.events.send(Event::Quit(topic, reason));
     }
 }
