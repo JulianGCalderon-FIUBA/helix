@@ -11,7 +11,7 @@ use iroh::{
 };
 pub use iroh_gossip::TopicId;
 use iroh_gossip::{
-    api::{ApiError, Event as GossipEvent, GossipSender},
+    api::{ApiError, Event as GossipEvent, GossipSender, GossipTopic},
     Gossip, ALPN,
 };
 use iroh_tickets::{ParseError, Ticket};
@@ -229,7 +229,7 @@ impl Actor {
                 let _ = chan.send(result);
             }
             Request::Leave => self.leave(),
-            Request::Subscribe(topic, bootstrap) => self.subscribe(topic, bootstrap).await,
+            Request::Subscribe(topic, bootstrap) => self.subscribe_topic(topic, bootstrap).await,
             Request::Unsubscribe(topic) => self.unsubscribe(Topic::Other(topic)),
             Request::Broadcast(topic, message) => {
                 if let Err(err) = self.broadcast(topic, message).await {
@@ -244,8 +244,7 @@ impl Actor {
             Some(topic) => topic,
             None => {
                 let topic = TopicId::from_bytes(rand::random());
-                self.session = Some(topic);
-                self.subscribe(topic, Vec::new()).await;
+                self.subscribe_session(topic, Vec::new()).await;
                 log::info!("created session {}", topic.fmt_short());
                 topic
             }
@@ -274,24 +273,31 @@ impl Actor {
             topic.fmt_short(),
             bootstrap.fmt_short()
         );
-        self.session = Some(topic);
-        self.subscribe(topic, vec![bootstrap]).await;
+        self.subscribe_session(topic, vec![bootstrap]).await;
         Ok(())
     }
 
-    /// Joins a topic. To join the session's, set `self.session` first.
-    async fn subscribe(&mut self, id: TopicId, bootstrap: Vec<EndpointId>) {
-        let topic = if self.session == Some(id) {
-            Topic::Session
-        } else {
-            Topic::Other(id)
-        };
-        let (sender, receiver) = self
+    async fn subscribe_session(&mut self, id: TopicId, bootstrap: Vec<EndpointId>) {
+        let subscription = self
             .gossip
             .subscribe(id, bootstrap)
             .await
-            .expect("gossip should be running")
-            .split();
+            .expect("gossip should be running");
+        self.session = Some(id);
+        self.insert(Topic::Session, subscription);
+    }
+
+    async fn subscribe_topic(&mut self, id: TopicId, bootstrap: Vec<EndpointId>) {
+        let subscription = self
+            .gossip
+            .subscribe(id, bootstrap)
+            .await
+            .expect("gossip should be running");
+        self.insert(Topic::Other(id), subscription);
+    }
+
+    fn insert(&mut self, topic: Topic, subscription: GossipTopic) {
+        let (sender, receiver) = subscription.split();
         let events = receiver.map(Some).chain(stream::once(None)).boxed();
         self.senders.insert(topic, sender);
         self.receivers.insert(topic, events);
