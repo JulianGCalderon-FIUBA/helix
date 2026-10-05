@@ -1347,7 +1347,7 @@ pub struct Editor {
     pub p2p: p2p::net::Service,
     p2p_incoming: UnboundedReceiverStream<p2p::net::Event>,
     /// Every document announced to the session, opened or not.
-    pub shared_files: HashMap<p2p::wire::SharedId, p2p::session::SharedFile>,
+    pub shared_files: HashMap<p2p::wire::SharedId, p2p::session::SharedMeta>,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;

@@ -3027,6 +3027,7 @@ fn session_share(
         .shared
         .as_ref()
         .expect("document was just shared")
+        .meta
         .label();
     cx.editor.set_status(format!("shared {label}"));
     Ok(())
