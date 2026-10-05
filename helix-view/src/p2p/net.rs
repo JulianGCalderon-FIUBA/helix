@@ -230,11 +230,7 @@ impl Actor {
                 let _ = chan.send(result);
             }
             Request::Leave => self.leave(),
-            Request::Subscribe(topic, bootstrap) => {
-                if let Err(err) = self.subscribe(Topic::Other(topic), topic, bootstrap).await {
-                    log::error!("failed to subscribe to {}: {err:#}", topic.fmt_short());
-                }
-            }
+            Request::Subscribe(topic, bootstrap) => self.subscribe(topic, bootstrap).await,
             Request::Unsubscribe(topic) => self.unsubscribe(Topic::Other(topic)),
             Request::Broadcast(topic, message) => {
                 if let Err(err) = self.broadcast(topic, message).await {
@@ -249,10 +245,8 @@ impl Actor {
             Some(topic) => topic,
             None => {
                 let topic = TopicId::from_bytes(rand::random());
-                self.subscribe(Topic::Session, topic, Vec::new())
-                    .await
-                    .expect("gossip should be running");
                 self.session = Some(topic);
+                self.subscribe(topic, Vec::new()).await;
                 log::info!("created session {}", topic.fmt_short());
                 topic
             }
@@ -281,23 +275,27 @@ impl Actor {
             topic.fmt_short(),
             bootstrap.fmt_short()
         );
-        self.subscribe(Topic::Session, topic, vec![bootstrap])
-            .await?;
         self.session = Some(topic);
+        self.subscribe(topic, vec![bootstrap]).await;
         Ok(())
     }
 
-    async fn subscribe(
-        &mut self,
-        topic: Topic,
-        id: TopicId,
-        bootstrap: Vec<EndpointId>,
-    ) -> Result<()> {
-        let (sender, receiver) = self.gossip.subscribe(id, bootstrap).await?.split();
+    /// Joins a topic. To join the session's, set `self.session` first.
+    async fn subscribe(&mut self, id: TopicId, bootstrap: Vec<EndpointId>) {
+        let topic = if self.session == Some(id) {
+            Topic::Session
+        } else {
+            Topic::Other(id)
+        };
+        let (sender, receiver) = self
+            .gossip
+            .subscribe(id, bootstrap)
+            .await
+            .expect("gossip should be running")
+            .split();
         let events = receiver.map(Some).chain(stream::once(None)).boxed();
         self.senders.insert(topic, sender);
         self.receivers.insert(topic, events);
-        Ok(())
     }
 
     /// Dropping both halves of a subscription leaves the topic.
