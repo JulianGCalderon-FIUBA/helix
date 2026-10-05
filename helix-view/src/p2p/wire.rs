@@ -37,6 +37,8 @@ pub enum Message {
         owner: EndpointId,
         path: Option<PathBuf>,
     },
+    /// Sent on the session topic, by the owner, when it stops sharing.
+    Unshare { id: SharedId },
     /// Sent on the document's topic, by peers waiting for its content.
     SnapshotRequest { id: SharedId },
     /// Sent on the document's topic, by the owner, answering a request.

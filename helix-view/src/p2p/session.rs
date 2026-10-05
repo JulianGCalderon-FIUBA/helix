@@ -11,7 +11,11 @@ use super::{
     net::{EndpointId, Event, Service, Topic},
     wire::{self, Message, SharedId},
 };
-use crate::{editor::Action, events::DocumentDidChange, Document, DocumentId, Editor};
+use crate::{
+    editor::Action,
+    events::{DocumentDidChange, DocumentDidClose},
+    Document, DocumentId, Editor,
+};
 
 /// A document someone announced to the session, which we may not have opened.
 pub struct SharedFile {
@@ -47,8 +51,15 @@ impl Shared {
     }
 }
 
-/// Broadcasts local edits to shared documents.
+/// Broadcasts local edits to shared documents, and stops syncing closed ones.
 pub fn register_hooks(p2p: Service) {
+    register_hook!(move |event: &mut DocumentDidClose<'_>| {
+        if let Some(shared) = event.doc.shared.take() {
+            event.editor.close_shared(shared);
+        }
+        Ok(())
+    });
+
     register_hook!(move |event: &mut DocumentDidChange<'_>| {
         if event.ghost_transaction {
             return Ok(());
@@ -144,8 +155,29 @@ impl Editor {
     }
 
     pub fn leave_session(&mut self) {
+        // Leaving drops every topic, so peers would keep listing our
+        // documents. The broadcasts go out before the node leaves.
+        let me = self.p2p.id();
+        for (id, file) in &self.shared_files {
+            if file.owner == me {
+                self.p2p
+                    .broadcast(Topic::Session, wire::encode(&Message::Unshare { id: *id }));
+            }
+        }
         self.p2p.leave();
         self.unshare_all_documents();
+    }
+
+    /// Leaves a closed document's topic. If the document is ours,
+    /// nobody can open it anymore, so we unshare it from everyone.
+    fn close_shared(&mut self, shared: Shared) {
+        log::info!("closing {}", shared.label());
+        self.p2p.unsubscribe(shared.id.topic());
+        if shared.owner == self.p2p.id() {
+            self.shared_files.remove(&shared.id);
+            let message = Message::Unshare { id: shared.id };
+            self.p2p.broadcast(Topic::Session, wire::encode(&message));
+        }
     }
 
     /// Unshares all documents, but keeps the buffers.
@@ -191,6 +223,7 @@ impl Editor {
                         log::info!("{} shared {}", owner.fmt_short(), id.fmt_short());
                     }
                 }
+                Ok(Message::Unshare { id }) => self.unshare(id),
                 Ok(Message::SnapshotRequest { id }) => self.send_snapshot(id),
                 // A snapshot is just a larger update, and importing what we
                 // already have is a no-op.
@@ -212,6 +245,20 @@ impl Editor {
                     self.set_error(format!("stopped sharing {}: {reason}", shared.label()));
                 }
             }
+        }
+    }
+
+    /// Forgets a document its owner stopped sharing. Our copy, if any,
+    /// stays open as a regular buffer.
+    fn unshare(&mut self, id: SharedId) {
+        self.shared_files.remove(&id);
+        let shared = self
+            .documents_mut()
+            .find(|doc| doc.shared_id() == Some(id))
+            .and_then(|doc| doc.shared.take());
+        if let Some(shared) = shared {
+            self.p2p.unsubscribe(id.topic());
+            self.set_status(format!("owner stopped sharing {}", shared.label()));
         }
     }
 
