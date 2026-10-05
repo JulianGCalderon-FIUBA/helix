@@ -47,7 +47,7 @@ pub struct Shared {
 pub fn register_hooks(p2p: Service) {
     register_hook!(move |event: &mut DocumentDidClose<'_>| {
         if let Some(shared) = event.doc.shared.take() {
-            event.editor.close_shared(shared);
+            event.editor.close_shared(shared.meta.id);
         }
         Ok(())
     });
@@ -155,41 +155,43 @@ impl Editor {
         self.p2p.leave();
     }
 
-    /// Leaves the topic of a document we stopped syncing. If the document
-    /// is ours, nobody can open it anymore, so we unshare it.
-    fn close_shared(&mut self, shared: Shared) {
-        log::info!("closing {}", shared.meta.label());
-        if shared.meta.owner == self.p2p.id() {
-            self.unshare(shared.meta.id);
-        } else {
-            self.p2p.unsubscribe(shared.meta.id.topic());
-        }
-    }
-
-    /// Stops sharing a document. Our copy, if open, stays as a regular
-    /// buffer, and is returned.
-    ///
-    /// If the document is ours, peers are told to unshare it as well.
-    fn unshare(&mut self, id: SharedId) -> Option<Shared> {
-        let meta = self.shared_files.remove(&id);
-        let shared = self
-            .shared_document_mut(id)
-            .and_then(|doc| doc.shared.take());
-        self.p2p.unsubscribe(id.topic());
-
-        if meta.is_some_and(|meta| meta.owner == self.p2p.id()) {
-            let message = Message::Unshare { id };
-            self.p2p.broadcast(Topic::Session, wire::encode(&message));
+    /// Stops syncing a document. Nobody can open ours without us, so we
+    /// unshare it.
+    fn close_shared(&mut self, id: SharedId) -> Option<Shared> {
+        let shared = self.stop_syncing(id);
+        if self
+            .shared_files
+            .get(&id)
+            .is_some_and(|meta| meta.owner == self.p2p.id())
+        {
+            self.unshare(id);
         }
         shared
     }
 
-    /// Unshares all documents, but keeps the buffers.
+    /// Leaves a document's topic. Our copy, if open, stays as a regular
+    /// buffer, and is returned.
+    fn stop_syncing(&mut self, id: SharedId) -> Option<Shared> {
+        self.p2p.unsubscribe(id.topic());
+        self.shared_document_mut(id)
+            .and_then(|doc| doc.shared.take())
+    }
+
+    /// Tells peers to forget a document of ours.
+    fn unshare(&mut self, id: SharedId) {
+        log::info!("unsharing {}", id.fmt_short());
+        self.shared_files.remove(&id);
+        let message = Message::Unshare { id };
+        self.p2p.broadcast(Topic::Session, wire::encode(&message));
+    }
+
+    /// Stops syncing all documents, but keeps the buffers.
     fn unshare_all_documents(&mut self) {
         let ids: Vec<_> = self.shared_files.keys().copied().collect();
         for id in ids {
-            self.unshare(id);
+            self.close_shared(id);
         }
+        self.shared_files.clear();
     }
 
     /// Called by the application for every p2p event.
@@ -214,7 +216,8 @@ impl Editor {
                     }
                 }
                 Ok(Message::Unshare { id }) => {
-                    if let Some(shared) = self.unshare(id) {
+                    self.shared_files.remove(&id);
+                    if let Some(shared) = self.stop_syncing(id) {
                         self.set_status(format!("owner stopped sharing {}", shared.meta.label()));
                     }
                 }
@@ -228,14 +231,10 @@ impl Editor {
                 self.set_error(format!("lost session: {reason}"));
             }
             Event::Lost(Topic::Other(topic), reason) => {
-                // Our copy no longer syncs, so it stops being shared. Others'
-                // copies may still sync, so the document can be reopened.
-                let shared = self
-                    .shared_document_mut(SharedId::from(topic))
-                    .and_then(|doc| doc.shared.take());
-                if let Some(shared) = shared {
+                // Others' documents can still be reopened, since we only stop
+                // syncing our copy.
+                if let Some(shared) = self.close_shared(SharedId::from(topic)) {
                     self.set_error(format!("stopped sharing {}: {reason}", shared.meta.label()));
-                    self.close_shared(shared);
                 }
             }
         }
