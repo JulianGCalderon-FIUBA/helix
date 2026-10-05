@@ -26,9 +26,6 @@ use tokio_stream::{wrappers::UnboundedReceiverStream, StreamMap};
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
 /// A gossip swarm we can be in.
-///
-/// The session topic is the one tickets invite into. Other topics are
-/// joined by id, and only by the peers that care about them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Topic {
     Session,
@@ -146,8 +143,6 @@ impl Ticket for SessionTicket {
     }
 }
 
-/// A topic's events, followed by a final `None` once the subscription
-/// ends. StreamMap drops finished streams silently, and we want to know.
 type Events = stream::Boxed<Option<Result<GossipEvent, ApiError>>>;
 
 /// The Service's internal actor
@@ -160,7 +155,6 @@ struct Actor {
     events: UnboundedSender<Event>,
     /// The session's topic id, if we are in one.
     session: Option<TopicId>,
-    /// Every topic we are in, including the session's.
     senders: HashMap<Topic, GossipSender>,
     receivers: StreamMap<Topic, Events>,
 }
@@ -284,7 +278,7 @@ impl Actor {
             .await
             .expect("gossip should be running");
         self.session = Some(id);
-        self.insert(Topic::Session, subscription);
+        self.insert_topic_subscription(Topic::Session, subscription);
     }
 
     async fn subscribe_topic(&mut self, id: TopicId, bootstrap: Vec<EndpointId>) {
@@ -293,17 +287,16 @@ impl Actor {
             .subscribe(id, bootstrap)
             .await
             .expect("gossip should be running");
-        self.insert(Topic::Other(id), subscription);
+        self.insert_topic_subscription(Topic::Other(id), subscription);
     }
 
-    fn insert(&mut self, topic: Topic, subscription: GossipTopic) {
+    fn insert_topic_subscription(&mut self, topic: Topic, subscription: GossipTopic) {
         let (sender, receiver) = subscription.split();
         let events = receiver.map(Some).chain(stream::once(None)).boxed();
         self.senders.insert(topic, sender);
         self.receivers.insert(topic, events);
     }
 
-    /// Dropping both halves of a subscription leaves the topic.
     fn unsubscribe(&mut self, topic: Topic) {
         self.senders.remove(&topic);
         self.receivers.remove(&topic);
@@ -350,14 +343,14 @@ impl Actor {
         }
     }
 
-    /// Losing the session topic means losing the whole session.
     fn lose(&mut self, topic: Topic, reason: String) {
+        log::error!("lost {topic:?}: {reason}");
         if topic == Topic::Session {
+            // Losing the session topic means losing the whole session.
             self.leave();
         } else {
             self.unsubscribe(topic);
         }
-        log::error!("lost {topic:?}: {reason}");
         let _ = self.events.send(Event::Lost(topic, reason));
     }
 }

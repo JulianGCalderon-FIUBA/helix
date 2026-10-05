@@ -9,9 +9,6 @@ use serde::{Deserialize, Serialize};
 use super::net::{EndpointId, TopicId};
 
 /// Identifies a single document across all peers.
-///
-/// It doubles as the id of the document's own topic, where its edits
-/// travel, so that only the peers that opened it receive them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SharedId(TopicId);
 

@@ -35,11 +35,10 @@ impl SharedMeta {
     }
 }
 
-/// Our copy of a shared document.
+/// Loaded copy of a shared document.
 pub struct Shared {
     pub meta: SharedMeta,
     pub replica: Replica,
-    /// Whether we asked for a snapshot, or need none because we own it.
     snapshot_requested: bool,
 }
 
@@ -47,7 +46,7 @@ pub struct Shared {
 pub fn register_hooks(p2p: Service) {
     register_hook!(move |event: &mut DocumentDidClose<'_>| {
         if let Some(shared) = event.doc.shared.take() {
-            event.editor.close_shared(shared.meta.id);
+            event.editor.stop_syncing_document(shared.meta.id);
         }
         Ok(())
     });
@@ -151,14 +150,16 @@ impl Editor {
     }
 
     pub fn leave_session(&mut self) {
-        self.unshare_all_documents();
+        self.stop_syncing_all_documents();
+        self.shared_files.clear();
         self.p2p.leave();
     }
 
-    /// Stops syncing a document. Nobody can open ours without us, so we
-    /// unshare it.
-    fn close_shared(&mut self, id: SharedId) -> Option<Shared> {
-        let shared = self.stop_syncing(id);
+    fn stop_syncing_document(&mut self, id: SharedId) -> Option<Shared> {
+        self.p2p.unsubscribe(id.topic());
+        let shared = self
+            .shared_document_mut(id)
+            .and_then(|doc| doc.shared.take());
         if self
             .shared_files
             .get(&id)
@@ -167,14 +168,6 @@ impl Editor {
             self.unshare(id);
         }
         shared
-    }
-
-    /// Leaves a document's topic. Our copy, if open, stays as a regular
-    /// buffer, and is returned.
-    fn stop_syncing(&mut self, id: SharedId) -> Option<Shared> {
-        self.p2p.unsubscribe(id.topic());
-        self.shared_document_mut(id)
-            .and_then(|doc| doc.shared.take())
     }
 
     /// Tells peers to forget a document of ours.
@@ -186,20 +179,18 @@ impl Editor {
     }
 
     /// Stops syncing all documents, but keeps the buffers.
-    fn unshare_all_documents(&mut self) {
+    fn stop_syncing_all_documents(&mut self) {
         let ids: Vec<_> = self.shared_files.keys().copied().collect();
         for id in ids {
-            self.close_shared(id);
+            self.stop_syncing_document(id);
         }
-        self.shared_files.clear();
     }
 
     /// Called by the application for every p2p event.
     pub fn handle_p2p_event(&mut self, event: Event) {
         match event {
             Event::NeighborUp(Topic::Session, peer) => {
-                // Announce every document we know of to late joiners, not only
-                // ours: the owner only notices a joiner it connects to directly.
+                // Announce every document we know of to late joiners.
                 for meta in self.shared_files.values() {
                     log::debug!("announcing {} to {}", meta.label(), peer.fmt_short());
                     self.announce(meta);
@@ -210,8 +201,6 @@ impl Editor {
                 let shared = self
                     .shared_document_mut(id)
                     .and_then(|doc| doc.shared.as_mut());
-                // A request sent before we connect to anyone reaches nobody.
-                // Later neighbors joined after us, so we only ask the first.
                 if let Some(shared) = shared.filter(|shared| !shared.snapshot_requested) {
                     shared.snapshot_requested = true;
                     self.request_snapshot(id);
@@ -226,7 +215,7 @@ impl Editor {
                 }
                 Ok(Message::Unshare { id }) => {
                     self.shared_files.remove(&id);
-                    if let Some(shared) = self.stop_syncing(id) {
+                    if let Some(shared) = self.stop_syncing_document(id) {
                         self.set_status(format!("owner stopped sharing {}", shared.meta.label()));
                     }
                 }
@@ -243,13 +232,12 @@ impl Editor {
                 Err(err) => log::warn!("dropping malformed message: {err:#}"),
             },
             Event::Lost(Topic::Session, reason) => {
-                self.unshare_all_documents();
+                self.stop_syncing_all_documents();
+                self.shared_files.clear();
                 self.set_error(format!("lost session: {reason}"));
             }
             Event::Lost(Topic::Other(topic), reason) => {
-                // Others' documents can still be reopened, since we only stop
-                // syncing our copy.
-                if let Some(shared) = self.close_shared(SharedId::from(topic)) {
+                if let Some(shared) = self.stop_syncing_document(SharedId::from(topic)) {
                     self.set_error(format!("stopped sharing {}: {reason}", shared.meta.label()));
                 }
             }
