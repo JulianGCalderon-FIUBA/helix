@@ -61,7 +61,7 @@ pub fn register_hooks(p2p: Service) {
 
         let update = shared.replica.from_local(event.changes);
         p2p.broadcast(
-            Topic::Session,
+            Topic::Other(shared.id.topic()),
             wire::encode(&Message::Edit {
                 id: shared.id,
                 update,
@@ -89,6 +89,8 @@ impl Editor {
 
         let shared = Shared::new(owner, path, doc.text());
         log::info!("sharing {}", shared.label());
+        // Peers that open the document join its topic through us.
+        self.p2p.subscribe(shared.id.topic(), Vec::new());
         self.p2p
             .broadcast(Topic::Session, wire::encode(&shared.to_message()));
         doc.shared = Some(shared);
@@ -130,9 +132,19 @@ impl Editor {
                 Ok(Message::Edit { id, update }) => self.apply_remote_update(id, &update),
                 Err(err) => log::warn!("dropping malformed message: {err:#}"),
             },
-            Event::Quit(_, reason) => {
+            Event::Quit(Topic::Session, reason) => {
                 self.unshare_all_documents();
                 self.set_error(format!("quit session: {reason}"));
+            }
+            Event::Quit(Topic::Other(topic), reason) => {
+                // Our copy no longer syncs, so it stops being shared.
+                let shared = self
+                    .documents_mut()
+                    .find(|doc| doc.shared_id().map(|id| id.topic()) == Some(topic))
+                    .and_then(|doc| doc.shared.take());
+                if let Some(shared) = shared {
+                    self.set_error(format!("stopped sharing {}: {reason}", shared.label()));
+                }
             }
         }
     }
@@ -173,6 +185,8 @@ impl Editor {
             replica,
         };
         log::info!("{} shared {}", owner.fmt_short(), shared.label());
+        // The owner is the one peer we know is in the topic.
+        self.p2p.subscribe(id.topic(), vec![owner]);
         doc.shared = Some(shared);
     }
 
