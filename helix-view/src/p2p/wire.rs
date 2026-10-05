@@ -28,7 +28,6 @@ pub enum Message {
         id: SharedId,
         owner: EndpointId,
         path: Option<PathBuf>,
-        /// A snapshot of the replica, which includes the text.
         replica: Vec<u8>,
     },
     Edit {

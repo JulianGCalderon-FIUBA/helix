@@ -4,7 +4,7 @@ use anyhow::Result;
 use helix_core::{ChangeSet, Operation, Rope, Transaction};
 use loro::{event::Diff, ExportMode, LoroDoc, LoroText, TextDelta};
 
-const TEXT: &str = "text";
+const TEXT_ID: &str = "text";
 
 pub struct Replica {
     doc: LoroDoc,
@@ -15,22 +15,21 @@ impl Replica {
     pub fn new(text: &Rope) -> Self {
         let doc = LoroDoc::new();
         let replica = Self {
-            text: doc.get_text(TEXT),
+            text: doc.get_text(TEXT_ID),
             doc,
         };
         replica
             .text
             .insert(0, &text.to_string())
-            .expect("insert into empty text should succeed");
+            .expect("insert should not fail");
         replica.doc.commit();
         replica
     }
 
-    /// Decodes a snapshot. The replica gets its own random peer id.
     pub fn decode(snapshot: &[u8]) -> Result<Self> {
         let doc = LoroDoc::from_snapshot(snapshot)?;
         Ok(Self {
-            text: doc.get_text(TEXT),
+            text: doc.get_text(TEXT_ID),
             doc,
         })
     }
@@ -38,7 +37,7 @@ impl Replica {
     pub fn encode(&self) -> Vec<u8> {
         self.doc
             .export(ExportMode::Snapshot)
-            .expect("snapshot should export")
+            .expect("export should not fail")
     }
 
     pub fn text(&self) -> String {
@@ -70,7 +69,7 @@ impl Replica {
 
         self.doc
             .export(ExportMode::updates(&before))
-            .expect("update should export")
+            .expect("export should not fail")
     }
 
     /// Translate a CRDT update to a local transaction.
