@@ -62,7 +62,7 @@ thiserror.workspace = true
 kstring = "2.0"
 
 bytes = "1"
-cola = { version = "0.5", features = ["serde"] }
+loro = "1.16"
 iroh = "1.0.3"
 iroh-gossip = { version = "0.101.0", default-features = false, features = ["net"] }
 iroh-tickets = "1.0.0"

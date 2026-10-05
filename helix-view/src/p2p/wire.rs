@@ -6,7 +6,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use super::{crdt::RemoteOperation, net::EndpointId};
+use super::net::EndpointId;
 
 /// Identifies a single document across all peers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -28,12 +28,11 @@ pub enum Message {
         id: SharedId,
         owner: EndpointId,
         path: Option<PathBuf>,
-        text: String,
         replica: Vec<u8>,
     },
     Edit {
         id: SharedId,
-        op: RemoteOperation,
+        update: Vec<u8>,
     },
 }
 
