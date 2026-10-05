@@ -39,7 +39,6 @@ impl SharedMeta {
 pub struct Shared {
     pub meta: SharedMeta,
     pub replica: Replica,
-    snapshot_requested: bool,
 }
 
 /// Broadcasts local edits to shared documents, and stops syncing closed ones.
@@ -106,7 +105,6 @@ impl Editor {
         doc.shared = Some(Shared {
             meta: meta.clone(),
             replica: Replica::new(doc.text()),
-            snapshot_requested: true,
         });
         self.announce(&meta);
         self.shared_files.insert(meta.id, meta);
@@ -139,7 +137,6 @@ impl Editor {
         let shared = Shared {
             meta: meta.clone(),
             replica: Replica::empty(),
-            snapshot_requested: false,
         };
         log::info!("opening {}", shared.meta.label());
         self.p2p.subscribe(id.topic(), vec![shared.meta.owner]);
@@ -196,13 +193,10 @@ impl Editor {
                     self.announce(meta);
                 }
             }
-            Event::NeighborUp(Topic::Other(topic), _) => {
+            Event::NeighborUp(Topic::Other(topic), peer) => {
                 let id = SharedId::from(topic);
-                let shared = self
-                    .shared_document_mut(id)
-                    .and_then(|doc| doc.shared.as_mut());
-                if let Some(shared) = shared.filter(|shared| !shared.snapshot_requested) {
-                    shared.snapshot_requested = true;
+                let shared = self.shared_document(id).and_then(|doc| doc.shared.as_ref());
+                if shared.is_some_and(|shared| shared.meta.owner == peer) {
                     self.request_snapshot(id);
                 }
             }
