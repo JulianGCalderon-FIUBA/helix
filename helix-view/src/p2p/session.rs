@@ -39,6 +39,8 @@ impl SharedMeta {
 pub struct Shared {
     pub meta: SharedMeta,
     pub replica: Replica,
+    /// Whether we asked for a snapshot, or need none because we own it.
+    snapshot_requested: bool,
 }
 
 /// Broadcasts local edits to shared documents, and stops syncing closed ones.
@@ -101,12 +103,11 @@ impl Editor {
             path,
         };
         log::info!("sharing {}", meta.label());
-        // Peers that open the document join its topic through us, so there
-        // is nobody to wait for. The subscription is requested either way.
-        drop(self.p2p.subscribe(meta.id.topic(), Vec::new()));
+        self.p2p.subscribe(meta.id.topic(), Vec::new());
         doc.shared = Some(Shared {
             meta: meta.clone(),
             replica: Replica::new(doc.text()),
+            snapshot_requested: true,
         });
         self.announce(&meta);
         self.shared_files.insert(meta.id, meta);
@@ -139,22 +140,11 @@ impl Editor {
         let shared = Shared {
             meta: meta.clone(),
             replica: Replica::empty(),
+            snapshot_requested: false,
         };
         log::info!("opening {}", shared.meta.label());
-        // The owner is the one peer we know is in the topic. We can only
-        // ask for a snapshot once we connect to someone there.
-        let joined = self.p2p.subscribe(id.topic(), vec![shared.meta.owner]);
-        let p2p = self.p2p.clone();
-        tokio::spawn(async move {
-            match joined.await {
-                Ok(()) => {
-                    log::debug!("requesting snapshot of {}", id.fmt_short());
-                    let message = Message::SnapshotRequest { id };
-                    p2p.broadcast(Topic::Other(id.topic()), wire::encode(&message));
-                }
-                Err(err) => log::warn!("failed to open {}: {err:#}", id.fmt_short()),
-            }
-        });
+        // The owner is the one peer we know is in the topic.
+        self.p2p.subscribe(id.topic(), vec![shared.meta.owner]);
 
         let doc_id = self.new_file(action);
         doc_mut!(self, &doc_id).shared = Some(shared);
@@ -215,7 +205,9 @@ impl Editor {
                     self.announce(meta);
                 }
             }
-            Event::NeighborUp(Topic::Other(_), _) => {}
+            Event::NeighborUp(Topic::Other(topic), _) => {
+                self.request_snapshot(SharedId::from(topic))
+            }
             Event::Received(_, bytes) => match wire::decode(&bytes) {
                 Ok(Message::Share { id, owner, path }) => {
                     let meta = SharedMeta { id, owner, path };
@@ -246,6 +238,25 @@ impl Editor {
                 }
             }
         }
+    }
+
+    /// Asks for a snapshot of a document we opened, the first time we
+    /// connect to someone in its topic. Broadcasting earlier reaches nobody.
+    fn request_snapshot(&mut self, id: SharedId) {
+        let Some(shared) = self
+            .shared_document_mut(id)
+            .and_then(|doc| doc.shared.as_mut())
+        else {
+            return;
+        };
+        if std::mem::replace(&mut shared.snapshot_requested, true) {
+            return;
+        }
+
+        log::debug!("requesting snapshot of {}", id.fmt_short());
+        let message = Message::SnapshotRequest { id };
+        self.p2p
+            .broadcast(Topic::Other(id.topic()), wire::encode(&message));
     }
 
     /// Answers a snapshot request, if the document is ours.
