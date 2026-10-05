@@ -45,8 +45,8 @@ pub struct Shared {
 /// Broadcasts local edits to shared documents, and stops syncing closed ones.
 pub fn register_hooks(p2p: Service) {
     register_hook!(move |event: &mut DocumentDidClose<'_>| {
-        if let Some(shared) = event.doc.shared.take() {
-            event.editor.stop_syncing_document(shared.meta.id);
+        if let Some(id) = event.doc.shared_id() {
+            event.editor.stop_syncing_document(id);
         }
         Ok(())
     });

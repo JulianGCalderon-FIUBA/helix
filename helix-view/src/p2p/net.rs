@@ -346,7 +346,6 @@ impl Actor {
     fn lose(&mut self, topic: Topic, reason: String) {
         log::error!("lost {topic:?}: {reason}");
         if topic == Topic::Session {
-            // Losing the session topic means losing the whole session.
             self.leave();
         } else {
             self.unsubscribe(topic);
