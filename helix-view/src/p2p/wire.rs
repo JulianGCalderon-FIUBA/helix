@@ -44,9 +44,11 @@ pub enum Message {
     },
     SnapshotRequest {
         id: SharedId,
+        nonce: u64,
     },
     Snapshot {
         id: SharedId,
+        nonce: u64,
         replica: Vec<u8>,
     },
     Edit {

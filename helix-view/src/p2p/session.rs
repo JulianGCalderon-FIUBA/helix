@@ -219,7 +219,7 @@ impl Editor {
                         self.set_status(format!("owner stopped sharing {}", shared.meta.label()));
                     }
                 }
-                Ok(Message::SnapshotRequest { id }) => {
+                Ok(Message::SnapshotRequest { id, .. }) => {
                     // Only the owner answers, so that a request gets a single snapshot.
                     let me = self.p2p.id();
                     let shared = self.shared_document(id).and_then(|doc| doc.shared.as_ref());
@@ -227,7 +227,7 @@ impl Editor {
                         self.send_snapshot(shared);
                     }
                 }
-                Ok(Message::Snapshot { id, replica }) => self.apply_remote_update(id, &replica),
+                Ok(Message::Snapshot { id, replica, .. }) => self.apply_remote_update(id, &replica),
                 Ok(Message::Edit { id, update }) => self.apply_remote_update(id, &update),
                 Err(err) => log::warn!("dropping malformed message: {err:#}"),
             },
@@ -246,7 +246,10 @@ impl Editor {
 
     fn request_snapshot(&self, id: SharedId) {
         log::debug!("requesting snapshot of {}", id.fmt_short());
-        let message = Message::SnapshotRequest { id };
+        let message = Message::SnapshotRequest {
+            id,
+            nonce: rand::random(),
+        };
         self.p2p
             .broadcast(Topic::Other(id.topic()), wire::encode(&message));
     }
@@ -255,6 +258,7 @@ impl Editor {
         log::debug!("sending snapshot of {}", shared.meta.label());
         let message = Message::Snapshot {
             id: shared.meta.id,
+            nonce: rand::random(),
             replica: shared.replica.encode(),
         };
         self.p2p
