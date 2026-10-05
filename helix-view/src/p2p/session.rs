@@ -157,8 +157,8 @@ impl Editor {
         self.p2p.leave();
     }
 
-    /// Leaves a closed document's topic. If the document is ours,
-    /// nobody can open it anymore, so we unshare it.
+    /// Leaves the topic of a document we stopped syncing. If the document
+    /// is ours, nobody can open it anymore, so we unshare it.
     fn close_shared(&mut self, shared: Shared) {
         log::info!("closing {}", shared.meta.label());
         if shared.meta.owner == self.p2p.id() {
@@ -232,9 +232,14 @@ impl Editor {
                 self.set_error(format!("quit session: {reason}"));
             }
             Event::Quit(Topic::Other(topic), reason) => {
-                // Our copy no longer syncs, so it stops being shared.
-                if let Some(shared) = self.unshare(SharedId::from(topic)) {
+                // Our copy no longer syncs, so it stops being shared. Others'
+                // copies may still sync, so the document can be reopened.
+                let shared = self
+                    .shared_document_mut(SharedId::from(topic))
+                    .and_then(|doc| doc.shared.take());
+                if let Some(shared) = shared {
                     self.set_error(format!("stopped sharing {}: {reason}", shared.meta.label()));
+                    self.close_shared(shared);
                 }
             }
         }
