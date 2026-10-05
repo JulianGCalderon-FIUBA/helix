@@ -1,7 +1,7 @@
 //! Bridges Helix's ChangeSets to CRDT operations.
 
 use anyhow::Result;
-use helix_core::{ChangeSet, Operation, Rope, Transaction};
+use helix_core::{Change, ChangeSet, Operation, Rope};
 use loro::{event::Diff, ExportMode, LoroDoc, LoroText, TextDelta};
 
 const TEXT_ID: &str = "text";
@@ -72,11 +72,11 @@ impl Replica {
             .expect("export should not fail")
     }
 
-    /// Translate a CRDT update to a local transaction.
+    /// Translate a CRDT update to local changes.
     ///
-    /// Returns None when the update changed nothing visible, for example
-    /// when Loro keeps it pending until its dependencies arrive.
-    pub fn from_remote(&mut self, text: &Rope, update: &[u8]) -> Result<Option<Transaction>> {
+    /// The changes are empty when Loro keeps the update pending
+    /// until its dependencies arrive.
+    pub fn from_remote(&mut self, update: &[u8]) -> Result<Vec<Change>> {
         let before = self.doc.state_frontiers();
         self.doc.import(update)?;
         let after = self.doc.state_frontiers();
@@ -101,9 +101,6 @@ impl Replica {
             }
         }
 
-        if changes.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(Transaction::change(text, changes.into_iter())))
+        Ok(changes)
     }
 }

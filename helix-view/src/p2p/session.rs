@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::{ensure, Result};
-use helix_core::Rope;
+use helix_core::{Rope, Transaction};
 use helix_event::register_hook;
 
 use super::{
@@ -190,11 +190,11 @@ impl Editor {
         let Some(mut shared) = doc.shared.take() else {
             return;
         };
-        match shared.replica.from_remote(doc.text(), update) {
-            Ok(Some(transaction)) => {
+        match shared.replica.from_remote(update) {
+            Ok(changes) => {
+                let transaction = Transaction::change(doc.text(), changes.into_iter());
                 doc.apply(&transaction, view_id);
             }
-            Ok(None) => log::trace!("pending edit for {}", id.fmt_short()),
             Err(err) => log::warn!("dropping edit for {}: {err:#}", id.fmt_short()),
         }
         doc.shared = Some(shared);
