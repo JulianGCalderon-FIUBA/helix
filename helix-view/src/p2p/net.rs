@@ -11,7 +11,7 @@ use iroh::{
 };
 pub use iroh_gossip::TopicId;
 use iroh_gossip::{
-    api::{ApiError, Event as GossipEvent, GossipSender, GossipTopic},
+    api::{ApiError, Event as GossipEvent, GossipSender},
     Gossip, ALPN,
 };
 use iroh_tickets::{ParseError, Ticket};
