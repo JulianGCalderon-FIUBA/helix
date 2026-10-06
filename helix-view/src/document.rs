@@ -2065,7 +2065,7 @@ impl Document {
     }
 
     pub fn shared_id(&self) -> Option<SharedId> {
-        self.shared.as_ref().map(|shared| shared.id)
+        self.shared.as_ref().map(|shared| shared.meta.id)
     }
 
     /// File path as a URL.

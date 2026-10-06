@@ -51,7 +51,7 @@ use helix_view::{
     info::Info,
     input::KeyEvent,
     keyboard::KeyCode,
-    p2p::{net::EndpointId, wire::SharedId},
+    p2p::session::SharedMeta,
     theme::Style,
     tree,
     view::View,
@@ -3399,34 +3399,17 @@ fn buffer_picker(cx: &mut Context) {
 
 /// Opens a picker of every buffer shared in the collaborative session
 fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
-    struct BufferMeta {
-        id: DocumentId,
-        shared_id: SharedId,
-        owner: EndpointId,
-        path: Option<PathBuf>,
-    }
-
-    let items = editor
-        .documents()
-        .filter_map(|doc| {
-            Some(BufferMeta {
-                id: doc.id(),
-                owner: doc.shared.as_ref()?.owner,
-                path: doc.shared.as_ref()?.path.clone(),
-                shared_id: doc.shared.as_ref()?.id,
-            })
-        })
-        .collect::<Vec<_>>();
+    let items = editor.shared_files.values().cloned().collect::<Vec<_>>();
 
     let columns = [
-        PickerColumn::new("owner", |meta: &BufferMeta, _| {
+        PickerColumn::new("owner", |meta: &SharedMeta, _| {
             meta.owner.fmt_short().to_string().into()
         }),
-        PickerColumn::new("path", |meta: &BufferMeta, config: &PathStyleConfig| {
+        PickerColumn::new("path", |meta: &SharedMeta, config: &PathStyleConfig| {
             config.stylize(meta.path.as_deref(), None)
         }),
-        PickerColumn::new("id", |meta: &BufferMeta, _| {
-            meta.shared_id.fmt_short().to_string().into()
+        PickerColumn::new("id", |meta: &SharedMeta, _| {
+            meta.id.fmt_short().to_string().into()
         }),
     ];
 
@@ -3436,16 +3419,19 @@ fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
         items,
         PathStyleConfig::new(&editor.theme),
         |cx, meta, action| {
-            cx.editor.switch(meta.id, action);
+            if let Err(err) = cx.editor.open_shared_document(meta.id, action) {
+                cx.editor.set_error(err.to_string());
+            }
         },
     )
     .with_preview(|editor, meta| {
-        let doc = &editor.documents.get(&meta.id)?;
+        // Only buffers we subscribed to have preview.
+        let doc = editor.shared_document(meta.id)?;
         let lines = doc.selections().values().next().map(|selection| {
             let cursor_line = selection.primary().cursor_line(doc.text().slice(..));
             (cursor_line, cursor_line)
         });
-        Some((meta.id.into(), lines))
+        Some((doc.id().into(), lines))
     });
     compositor.push(Box::new(overlaid(picker)));
 }

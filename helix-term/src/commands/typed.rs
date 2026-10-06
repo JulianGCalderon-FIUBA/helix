@@ -3027,6 +3027,7 @@ fn session_share(
         .shared
         .as_ref()
         .expect("document was just shared")
+        .meta
         .label();
     cx.editor.set_status(format!("shared {label}"));
     Ok(())
@@ -3061,7 +3062,7 @@ fn session_close(
         return Ok(());
     }
 
-    cx.editor.leave_session();
+    cx.editor.shutdown();
     cx.editor.set_status("left session");
     Ok(())
 }

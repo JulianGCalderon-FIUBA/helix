@@ -6,32 +6,51 @@ use anyhow::Result;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use super::net::EndpointId;
+use super::net::{EndpointId, TopicId};
 
 /// Identifies a single document across all peers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SharedId(u64);
+pub struct SharedId(TopicId);
 
 impl SharedId {
     pub fn random() -> Self {
-        Self(rand::random())
+        Self(TopicId::from_bytes(rand::random()))
+    }
+
+    pub fn topic(&self) -> TopicId {
+        self.0
     }
 
     pub fn fmt_short(&self) -> impl Display {
-        format!("{:08x}", self.0 as u32)
+        self.0.fmt_short()
     }
 }
 
+impl From<TopicId> for SharedId {
+    fn from(topic: TopicId) -> Self {
+        Self(topic)
+    }
+}
+
+/// Messages on a document's topic are about that document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
     Share {
         id: SharedId,
         owner: EndpointId,
         path: Option<PathBuf>,
+    },
+    Unshare {
+        id: SharedId,
+    },
+    SnapshotRequest {
+        nonce: u64,
+    },
+    Snapshot {
+        nonce: u64,
         replica: Vec<u8>,
     },
     Edit {
-        id: SharedId,
         update: Vec<u8>,
     },
 }
