@@ -26,6 +26,9 @@ use tokio_stream::{wrappers::UnboundedReceiverStream, StreamMap};
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
 /// A gossip swarm we can be in.
+///
+/// There is a general session topic for announcements,
+/// and one additional topic per shared file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Topic {
     Session,
@@ -37,7 +40,7 @@ pub enum Topic {
 pub enum Event {
     NeighborUp(Topic, EndpointId),
     Received(Topic, Bytes),
-    Lost(Topic, String),
+    Exit(Topic, String),
 }
 
 /// What the editor asks to the service.
@@ -45,7 +48,7 @@ pub enum Event {
 enum Request {
     Ticket(oneshot::Sender<String>),
     Join(String, oneshot::Sender<Result<()>>),
-    Leave,
+    Shutdown,
     Subscribe(TopicId, Vec<EndpointId>),
     Unsubscribe(TopicId),
     Broadcast(Topic, Bytes),
@@ -97,9 +100,9 @@ impl Service {
         async move { rx.await.expect("actor should reply") }
     }
 
-    /// Leaves the session.
-    pub fn leave(&self) {
-        self.send(Request::Leave);
+    /// Shutdown the service.
+    pub fn shutdown(&self) {
+        self.send(Request::Shutdown);
     }
 
     /// Joins a topic. We get a NeighborUp once we connect to a peer there.
@@ -222,7 +225,7 @@ impl Actor {
                 }
                 let _ = chan.send(result);
             }
-            Request::Leave => self.leave(),
+            Request::Shutdown => self.shutdown(),
             Request::Subscribe(topic, bootstrap) => self.subscribe_topic(topic, bootstrap).await,
             Request::Unsubscribe(topic) => self.unsubscribe(Topic::Other(topic)),
             Request::Broadcast(topic, message) => {
@@ -278,7 +281,10 @@ impl Actor {
             .await
             .expect("gossip should be running");
         self.session = Some(id);
-        self.insert_topic_subscription(Topic::Session, subscription);
+        let (sender, receiver) = subscription.split();
+        let events = receiver.map(Some).chain(stream::once(None)).boxed();
+        self.senders.insert(Topic::Session, sender);
+        self.receivers.insert(Topic::Session, events);
     }
 
     async fn subscribe_topic(&mut self, id: TopicId, bootstrap: Vec<EndpointId>) {
@@ -287,14 +293,10 @@ impl Actor {
             .subscribe(id, bootstrap)
             .await
             .expect("gossip should be running");
-        self.insert_topic_subscription(Topic::Other(id), subscription);
-    }
-
-    fn insert_topic_subscription(&mut self, topic: Topic, subscription: GossipTopic) {
         let (sender, receiver) = subscription.split();
         let events = receiver.map(Some).chain(stream::once(None)).boxed();
-        self.senders.insert(topic, sender);
-        self.receivers.insert(topic, events);
+        self.senders.insert(Topic::Other(id), sender);
+        self.receivers.insert(Topic::Other(id), events);
     }
 
     fn unsubscribe(&mut self, topic: Topic) {
@@ -312,12 +314,11 @@ impl Actor {
         Ok(())
     }
 
-    fn leave(&mut self) {
+    fn shutdown(&mut self) {
         self.senders.clear();
         self.receivers.clear();
-        if let Some(topic) = self.session.take() {
-            log::info!("left session {}", topic.fmt_short());
-        }
+        self.session.take();
+        log::info!("shutdown session");
     }
 
     fn on_event(&mut self, topic: Topic, event: Option<Result<GossipEvent, ApiError>>) {
@@ -337,19 +338,19 @@ impl Actor {
                 );
                 let _ = self.events.send(Event::Received(topic, message.content));
             }
-            Some(Ok(GossipEvent::Lagged)) => self.lose(topic, "fell behind".into()),
-            Some(Err(err)) => self.lose(topic, format!("gossip failed: {err:#}")),
-            None => self.lose(topic, "gossip stream ended".into()),
+            Some(Ok(GossipEvent::Lagged)) => self.exit(topic, "fell behind".into()),
+            Some(Err(err)) => self.exit(topic, format!("gossip failed: {err:#}")),
+            None => self.exit(topic, "gossip stream ended".into()),
         }
     }
 
-    fn lose(&mut self, topic: Topic, reason: String) {
-        log::error!("lost {topic:?}: {reason}");
+    fn exit(&mut self, topic: Topic, reason: String) {
+        log::error!("exit {topic:?}: {reason}");
         if topic == Topic::Session {
-            self.leave();
+            self.shutdown();
         } else {
             self.unsubscribe(topic);
         }
-        let _ = self.events.send(Event::Lost(topic, reason));
+        let _ = self.events.send(Event::Exit(topic, reason));
     }
 }

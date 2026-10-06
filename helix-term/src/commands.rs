@@ -3419,7 +3419,7 @@ fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
         items,
         PathStyleConfig::new(&editor.theme),
         |cx, meta, action| {
-            if let Err(err) = cx.editor.open_shared(meta.id, action) {
+            if let Err(err) = cx.editor.open_shared_document(meta.id, action) {
                 cx.editor.set_error(err.to_string());
             }
         },

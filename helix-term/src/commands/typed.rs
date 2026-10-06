@@ -3062,7 +3062,7 @@ fn session_close(
         return Ok(());
     }
 
-    cx.editor.leave_session();
+    cx.editor.shutdown();
     cx.editor.set_status("left session");
     Ok(())
 }

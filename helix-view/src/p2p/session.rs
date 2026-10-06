@@ -45,7 +45,7 @@ pub struct Shared {
 pub fn register_hooks(p2p: Service) {
     register_hook!(move |event: &mut DocumentDidClose<'_>| {
         if let Some(id) = event.doc.shared_id() {
-            event.editor.stop_syncing_document(id);
+            event.editor.unsync_document(id);
         }
         Ok(())
     });
@@ -122,7 +122,7 @@ impl Editor {
     ///
     /// The buffer starts empty, and fills in once the owner answers
     /// with a snapshot.
-    pub fn open_shared(&mut self, id: SharedId, action: Action) -> Result<()> {
+    pub fn open_shared_document(&mut self, id: SharedId, action: Action) -> Result<()> {
         if let Some(doc_id) = self.shared_document(id).map(Document::id) {
             self.switch(doc_id, action);
             return Ok(());
@@ -143,13 +143,13 @@ impl Editor {
         Ok(())
     }
 
-    pub fn leave_session(&mut self) {
-        self.stop_syncing_all_documents();
+    pub fn shutdown(&mut self) {
+        self.unsync_all_documents();
         self.shared_files.clear();
-        self.p2p.leave();
+        self.p2p.shutdown();
     }
 
-    fn stop_syncing_document(&mut self, id: SharedId) -> Option<Shared> {
+    fn unsync_document(&mut self, id: SharedId) -> Option<Shared> {
         self.p2p.unsubscribe(id.topic());
         let shared = self
             .shared_document_mut(id)
@@ -159,24 +159,18 @@ impl Editor {
             .get(&id)
             .is_some_and(|meta| meta.owner == self.p2p.id())
         {
-            self.unshare(id);
+            log::info!("unsharing {}", id.fmt_short());
+            self.shared_files.remove(&id);
+            let message = Message::Unshare { id };
+            self.p2p.broadcast(Topic::Session, wire::encode(&message));
         }
         shared
     }
 
-    /// Tells peers to forget a document of ours.
-    fn unshare(&mut self, id: SharedId) {
-        log::info!("unsharing {}", id.fmt_short());
-        self.shared_files.remove(&id);
-        let message = Message::Unshare { id };
-        self.p2p.broadcast(Topic::Session, wire::encode(&message));
-    }
-
-    /// Stops syncing all documents, but keeps the buffers.
-    fn stop_syncing_all_documents(&mut self) {
+    fn unsync_all_documents(&mut self) {
         let ids: Vec<_> = self.documents().filter_map(Document::shared_id).collect();
         for id in ids {
-            self.stop_syncing_document(id);
+            self.unsync_document(id);
         }
     }
 
@@ -191,23 +185,26 @@ impl Editor {
                 }
             }
             Event::NeighborUp(Topic::Other(topic), peer) => {
-                let id = SharedId::from(topic);
-                let shared = self.shared_document(id).and_then(|doc| doc.shared.as_ref());
+                let shared = self
+                    .shared_document(SharedId::from(topic))
+                    .and_then(|doc| doc.shared.as_ref());
+                // If we are connected to the owner, request the spanshot.
+                // TODO: this should be done over a different channel.
                 if shared.is_some_and(|shared| shared.meta.owner == peer) {
-                    self.request_snapshot(id);
+                    self.request_snapshot(SharedId::from(topic));
                 }
             }
             Event::Received(topic, bytes) => match wire::decode(&bytes) {
                 Ok(message) => self.handle_message(topic, message),
                 Err(err) => log::warn!("dropping malformed message: {err:#}"),
             },
-            Event::Lost(Topic::Session, reason) => {
-                self.stop_syncing_all_documents();
+            Event::Exit(Topic::Session, reason) => {
+                self.unsync_all_documents();
                 self.shared_files.clear();
                 self.set_error(format!("lost session: {reason}"));
             }
-            Event::Lost(Topic::Other(topic), reason) => {
-                if let Some(shared) = self.stop_syncing_document(SharedId::from(topic)) {
+            Event::Exit(Topic::Other(topic), reason) => {
+                if let Some(shared) = self.unsync_document(SharedId::from(topic)) {
                     self.set_error(format!("stopped sharing {}: {reason}", shared.meta.label()));
                 }
             }
@@ -224,7 +221,7 @@ impl Editor {
             }
             (_, Message::Unshare { id }) => {
                 self.shared_files.remove(&id);
-                if let Some(shared) = self.stop_syncing_document(id) {
+                if let Some(shared) = self.unsync_document(id) {
                     self.set_status(format!("owner stopped sharing {}", shared.meta.label()));
                 }
             }
