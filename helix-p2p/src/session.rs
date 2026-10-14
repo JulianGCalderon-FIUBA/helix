@@ -100,7 +100,8 @@ impl Session {
     /// since we are already in the swarm.
     pub fn joined(me: EndpointId, seed: u64) -> Self {
         let mut session = Self::new(me, seed);
-        session.broadcast(Channel::Session, &Message::DocumentsRequest);
+        let nonce = session.rng.random();
+        session.broadcast(Channel::Session, &Message::DocumentsRequest { nonce });
         session
     }
 
@@ -192,7 +193,7 @@ impl Session {
         };
 
         match (channel, message) {
-            (Channel::Session, Message::DocumentsRequest) => {
+            (Channel::Session, Message::DocumentsRequest { .. }) => {
                 let owned: Vec<_> = self
                     .documents
                     .values()

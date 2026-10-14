@@ -43,8 +43,9 @@ pub enum Message {
     Unshare {
         id: SharedId,
     },
-    /// Asks the owners to announce their documents again.
-    DocumentsRequest,
+    DocumentsRequest {
+        nonce: u64,
+    },
     SnapshotRequest {
         nonce: u64,
     },
