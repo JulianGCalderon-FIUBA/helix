@@ -2971,7 +2971,7 @@ fn session_ticket(
         return Ok(());
     }
 
-    let ticket = cx.editor.p2p.ticket();
+    let ticket = cx.editor.p2p.service.ticket();
     cx.jobs.callback(async move {
         let ticket = ticket.await;
         Ok(job::Callback::EditorCompositor(Box::new(
@@ -2997,13 +2997,16 @@ fn session_join(
         return Ok(());
     }
 
-    let join = cx.editor.p2p.join(args[0].to_string());
+    let join = cx.editor.p2p.service.join(args[0].to_string());
     cx.editor.set_status("joining session");
     cx.jobs.callback(async move {
         let result = join.await;
         Ok(job::Callback::Editor(Box::new(
             move |editor: &mut Editor| match result {
-                Ok(()) => editor.set_status("joined session"),
+                Ok(()) => {
+                    editor.join_session();
+                    editor.set_status("joined session");
+                }
                 Err(err) => editor.set_error(format!("failed to join session: {err:#}")),
             },
         )))
@@ -3021,14 +3024,9 @@ fn session_share(
     }
 
     let doc_id = doc!(cx.editor).id();
-    cx.editor.share_document(doc_id)?;
+    let id = cx.editor.share_document(doc_id)?;
 
-    let label = doc!(cx.editor)
-        .shared
-        .as_ref()
-        .expect("document was just shared")
-        .meta
-        .label();
+    let label = cx.editor.p2p.documents()[&id].label();
     cx.editor.set_status(format!("shared {label}"));
     Ok(())
 }
@@ -3062,8 +3060,8 @@ fn session_close(
         return Ok(());
     }
 
-    cx.editor.shutdown();
-    cx.editor.set_status("left session");
+    // Leaving sets the status once the session says we left.
+    cx.editor.p2p_input(|session| session.leave());
     Ok(())
 }
 

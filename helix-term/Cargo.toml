@@ -48,6 +48,7 @@ helix-view = { path = "../helix-view" }
 helix-lsp = { path = "../helix-lsp" }
 helix-dap = { path = "../helix-dap" }
 helix-vcs = { path = "../helix-vcs" }
+helix-p2p = { path = "../helix-p2p" }
 helix-loader = { path = "../helix-loader" }
 
 anyhow = "1"

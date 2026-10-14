@@ -43,6 +43,9 @@ pub enum Message {
     Unshare {
         id: SharedId,
     },
+    DocumentsRequest {
+        nonce: u64,
+    },
     SnapshotRequest {
         nonce: u64,
     },
