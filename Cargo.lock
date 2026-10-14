@@ -2541,6 +2541,7 @@ dependencies = [
  "helix-event",
  "helix-loader",
  "helix-lsp",
+ "helix-p2p",
  "helix-stdx",
  "helix-tui",
  "helix-vcs",

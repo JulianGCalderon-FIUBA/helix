@@ -35,6 +35,10 @@ impl Replica {
         }
     }
 
+    pub fn text(&self) -> String {
+        self.text.to_string()
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         self.doc
             .export(ExportMode::Snapshot)

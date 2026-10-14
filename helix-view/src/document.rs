@@ -48,7 +48,6 @@ use crate::{
     editor::Config,
     events::{DocumentDidChange, SelectionDidChange},
     expansion,
-    p2p::Shared,
     view::ViewPosition,
     DocumentId, Editor, Theme, View, ViewId,
 };
@@ -193,8 +192,9 @@ pub struct Document {
     // it back as it separated from the edits. We could split out the parts manually but that will
     // be more troublesome.
     pub history: Cell<History>,
-    /// Present only while the document is shared with a session.
-    pub shared: Option<Shared>,
+    /// Marks a buffer synced with the session. The session holds its
+    /// replica, but the hooks only see the document, so they need this.
+    pub shared: Option<SharedId>,
     pub config: Arc<dyn DynAccess<Config>>,
 
     savepoints: Vec<Weak<SavePoint>>,
@@ -2063,10 +2063,6 @@ impl Document {
     /// File path on disk.
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
-    }
-
-    pub fn shared_id(&self) -> Option<SharedId> {
-        self.shared.as_ref().map(|shared| shared.meta.id)
     }
 
     /// File path as a URL.

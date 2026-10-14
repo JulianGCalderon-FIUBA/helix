@@ -1,120 +1,153 @@
-//! Glue between the editor and helix-p2p.
+//! Glue between the editor and the helix-p2p session.
+//!
+//! The editor thread drives the session: it passes in user actions, local
+//! edits and whatever the transport receives, then drains what comes out.
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+
+use anyhow::{ensure, Result};
+use helix_core::{ChangeSet, Transaction};
+use helix_event::register_hook;
+use helix_p2p::{
+    net::{self, Service},
+    session::{Event, Reason, Session, SharedMeta},
+    wire::SharedId,
+};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::{
     editor::Action,
     events::{DocumentDidChange, DocumentDidClose},
     Document, DocumentId, Editor,
 };
-use anyhow::{bail, ensure, Result};
-use helix_core::Transaction;
-use helix_event::register_hook;
-use helix_p2p::{
-    crdt::Replica,
-    net::{EndpointId, Event, Service, Topic},
-    wire::{self, Message, SharedId},
-};
 
-/// What the session knows about a shared document, opened or not.
-#[derive(Clone)]
-pub struct SharedMeta {
-    pub id: SharedId,
-    pub owner: EndpointId,
-    /// The path relative to the owner's workspace.
-    pub path: Option<PathBuf>,
+pub struct P2p {
+    pub service: Service,
+    session: Session,
+    pub(crate) incoming: UnboundedReceiverStream<net::Event>,
+    /// Local edits to shared buffers, which the hook can't hand to the
+    /// session directly because it only sees the document.
+    local_changes_tx: UnboundedSender<(SharedId, ChangeSet)>,
+    pub(crate) local_changes: UnboundedReceiver<(SharedId, ChangeSet)>,
 }
 
-impl SharedMeta {
-    pub fn label(&self) -> String {
-        match &self.path {
-            Some(path) => format!("{} ({})", path.display(), self.id.fmt_short()),
-            None => format!("buffer ({})", self.id.fmt_short()),
+impl P2p {
+    pub fn new() -> Self {
+        let (service, incoming) = Service::new();
+        let (local_changes_tx, local_changes) = unbounded_channel();
+        Self {
+            session: Session::new(service.id(), rand::random()),
+            service,
+            incoming,
+            local_changes_tx,
+            local_changes,
         }
+    }
+
+    /// The session, once it has seen every local edit.
+    ///
+    /// Remote edits are diffed against the replicas, so the session must
+    /// have every edit to the buffers before it takes any other input.
+    pub fn session(&mut self) -> &mut Session {
+        while let Ok((id, changes)) = self.local_changes.try_recv() {
+            self.session.local_change(id, &changes);
+        }
+        &mut self.session
+    }
+
+    /// Feeds a local edit taken off the queue, and every one after it.
+    pub(crate) fn local_change(&mut self, id: SharedId, changes: ChangeSet) {
+        self.session.local_change(id, &changes);
+        self.session();
+    }
+
+    /// Every document announced to the session, opened or not.
+    pub fn documents(&self) -> &HashMap<SharedId, SharedMeta> {
+        self.session.documents()
     }
 }
 
-/// Loaded copy of a shared document.
-pub struct Shared {
-    pub meta: SharedMeta,
-    pub replica: Replica,
+impl Default for P2p {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-/// Broadcasts local edits to shared documents, and stops syncing closed ones.
-pub fn register_hooks(p2p: Service) {
+/// Queues local edits to shared buffers, and stops syncing closed ones.
+pub fn register_hooks(p2p: &P2p) {
     register_hook!(move |event: &mut DocumentDidClose<'_>| {
-        if let Some(id) = event.doc.shared_id() {
-            event.editor.unsync_document(id);
+        if let Some(id) = event.doc.shared {
+            event.editor.p2p_input(|session| session.close(id));
         }
         Ok(())
     });
 
+    let local_changes = p2p.local_changes_tx.clone();
     register_hook!(move |event: &mut DocumentDidChange<'_>| {
+        // TODO: ghost transactions still change the buffer (#44).
         if event.ghost_transaction {
             return Ok(());
         }
-        let Some(shared) = event.doc.shared.as_mut() else {
-            return Ok(());
-        };
-
-        let update = shared.replica.from_local(event.changes);
-        p2p.broadcast(
-            Topic::Other(shared.meta.id.topic()),
-            wire::encode(&Message::Edit { update }),
-        );
-
+        if let Some(id) = event.doc.shared {
+            let _ = local_changes.send((id, event.changes.clone()));
+        }
         Ok(())
     });
 }
 
 impl Editor {
-    /// Our open copy of a shared document.
-    pub fn shared_document(&self, id: SharedId) -> Option<&Document> {
-        self.documents().find(|doc| doc.shared_id() == Some(id))
+    /// Gives the session an input, then carries out what comes out of it.
+    pub fn p2p_input<T>(&mut self, input: impl FnOnce(&mut Session) -> T) -> T {
+        let result = input(self.p2p.session());
+        self.drain_p2p();
+        result
     }
 
-    pub fn shared_document_mut(&mut self, id: SharedId) -> Option<&mut Document> {
-        self.documents_mut().find(|doc| doc.shared_id() == Some(id))
+    /// Carries out everything the session has queued.
+    ///
+    /// Runs right after each input, so that remote changes reach the
+    /// buffer before anything else can edit it.
+    pub(crate) fn drain_p2p(&mut self) {
+        while let Some(transmit) = self.p2p.session.poll_transmit() {
+            self.p2p.service.transmit(transmit);
+        }
+        while let Some(event) = self.p2p.session.poll_event() {
+            self.apply_p2p_event(event);
+        }
+    }
+
+    /// Called by the application for every transport event.
+    pub fn handle_p2p_event(&mut self, event: net::Event) {
+        match event {
+            net::Event::Received(channel, message) => {
+                self.p2p_input(|session| session.receive(channel, &message))
+            }
+            net::Event::Exit(channel, reason) => {
+                self.p2p_input(|session| session.exited(channel, reason))
+            }
+        }
+    }
+
+    /// Our open copy of a shared document.
+    pub fn shared_document(&self, id: SharedId) -> Option<&Document> {
+        self.documents().find(|doc| doc.shared == Some(id))
     }
 
     /// Shares a document with the session.
-    pub fn share_document(&mut self, doc_id: DocumentId) -> Result<()> {
-        let owner = self.p2p.id();
-        let doc = self
-            .documents
-            .get_mut(&doc_id)
-            .expect("document should exist");
+    pub fn share_document(&mut self, doc_id: DocumentId) -> Result<SharedId> {
+        let doc = doc!(self, &doc_id);
         ensure!(doc.shared.is_none(), "buffer is already shared");
 
         let path = doc.path().map(|path| {
             let (workspace, _) = helix_loader::find_workspace();
             path.strip_prefix(&workspace).unwrap_or(path).to_path_buf()
         });
+        let text = doc.text().clone();
 
-        let meta = SharedMeta {
-            id: SharedId::random(),
-            owner,
-            path,
-        };
-        log::info!("sharing {}", meta.label());
-        self.p2p.subscribe(meta.id.topic(), Vec::new());
-        doc.shared = Some(Shared {
-            meta: meta.clone(),
-            replica: Replica::new(doc.text()),
-        });
-        self.announce(&meta);
-        self.shared_files.insert(meta.id, meta);
-        Ok(())
-    }
-
-    /// Tells the session about a document, but not what it contains.
-    fn announce(&self, meta: &SharedMeta) {
-        let message = Message::Share {
-            id: meta.id,
-            owner: meta.owner,
-            path: meta.path.clone(),
-        };
-        self.p2p.broadcast(Topic::Session, wire::encode(&message));
+        let id = self.p2p_input(|session| session.share(path, &text));
+        doc_mut!(self, &doc_id).shared = Some(id);
+        Ok(id)
     }
 
     /// Opens our copy of a shared document, or switches to it if open.
@@ -126,165 +159,65 @@ impl Editor {
             self.switch(doc_id, action);
             return Ok(());
         }
-        let Some(meta) = self.shared_files.get(&id) else {
-            bail!("{} is no longer shared", id.fmt_short());
-        };
 
-        let shared = Shared {
-            meta: meta.clone(),
-            replica: Replica::empty(),
-        };
-        log::info!("opening {}", shared.meta.label());
-        self.p2p.subscribe(id.topic(), vec![shared.meta.owner]);
-
+        self.p2p_input(|session| session.open(id))?;
         let doc_id = self.new_file(action);
-        doc_mut!(self, &doc_id).shared = Some(shared);
+        doc_mut!(self, &doc_id).shared = Some(id);
         Ok(())
     }
 
-    pub fn shutdown(&mut self) {
-        self.unsync_all_documents();
-        self.shared_files.clear();
-        self.p2p.shutdown();
+    /// Starts over in the session the transport has just joined.
+    pub fn join_session(&mut self) {
+        // Documents from the old session are no longer synced.
+        self.clear_shared_markers();
+        self.p2p.session = Session::joined(self.p2p.service.id(), rand::random());
+        self.drain_p2p();
     }
 
-    fn unsync_document(&mut self, id: SharedId) -> Option<Shared> {
-        self.p2p.unsubscribe(id.topic());
-        let shared = self
-            .shared_document_mut(id)
-            .and_then(|doc| doc.shared.take());
-        if self
-            .shared_files
-            .get(&id)
-            .is_some_and(|meta| meta.owner == self.p2p.id())
-        {
-            log::info!("unsharing {}", id.fmt_short());
-            self.shared_files.remove(&id);
-            let message = Message::Unshare { id };
-            self.p2p.broadcast(Topic::Session, wire::encode(&message));
-        }
-        shared
-    }
-
-    fn unsync_all_documents(&mut self) {
-        let ids: Vec<_> = self.documents().filter_map(Document::shared_id).collect();
-        for id in ids {
-            self.unsync_document(id);
-        }
-    }
-
-    /// Called by the application for every p2p event.
-    pub fn handle_p2p_event(&mut self, event: Event) {
+    fn apply_p2p_event(&mut self, event: Event) {
         match event {
-            Event::NeighborUp(Topic::Session, peer) => {
-                // Announce every document we know of to late joiners.
-                for meta in self.shared_files.values() {
-                    log::debug!("announcing {} to {}", meta.label(), peer.fmt_short());
-                    self.announce(meta);
-                }
-            }
-            Event::NeighborUp(Topic::Other(topic), peer) => {
-                let shared = self
-                    .shared_document(SharedId::from(topic))
-                    .and_then(|doc| doc.shared.as_ref());
-                // If we are connected to the owner, request the spanshot.
-                // TODO: this should be done over a different channel.
-                if shared.is_some_and(|shared| shared.meta.owner == peer) {
-                    self.request_snapshot(SharedId::from(topic));
-                }
-            }
-            Event::Received(topic, bytes) => match wire::decode(&bytes) {
-                Ok(message) => self.handle_message(topic, message),
-                Err(err) => log::warn!("dropping malformed message: {err:#}"),
-            },
-            Event::Exit(Topic::Session, reason) => {
-                self.unsync_all_documents();
-                self.shared_files.clear();
-                self.set_error(format!("lost session: {reason}"));
-            }
-            Event::Exit(Topic::Other(topic), reason) => {
-                if let Some(shared) = self.unsync_document(SharedId::from(topic)) {
-                    self.set_error(format!("stopped sharing {}: {reason}", shared.meta.label()));
-                }
-            }
-        }
-    }
+            Event::Changes { id, changes } => {
+                let Some(doc_id) = self.shared_document(id).map(Document::id) else {
+                    return;
+                };
+                let view_id = self.get_synced_view_id(doc_id);
+                let doc = doc_mut!(self, &doc_id);
 
-    fn handle_message(&mut self, topic: Topic, message: Message) {
-        match (topic, message) {
-            (_, Message::Share { id, owner, path }) => {
-                let meta = SharedMeta { id, owner, path };
-                if self.shared_files.insert(id, meta).is_none() {
-                    log::info!("{} shared {}", owner.fmt_short(), id.fmt_short());
-                }
-            }
-            (_, Message::Unshare { id }) => {
-                self.shared_files.remove(&id);
-                if let Some(shared) = self.unsync_document(id) {
-                    self.set_status(format!("owner stopped sharing {}", shared.meta.label()));
-                }
-            }
-            (Topic::Other(topic), Message::SnapshotRequest { .. }) => {
-                // Only the owner answers, so that a request gets a single snapshot.
-                let me = self.p2p.id();
-                let shared = self
-                    .shared_document(SharedId::from(topic))
-                    .and_then(|doc| doc.shared.as_ref());
-                if let Some(shared) = shared.filter(|shared| shared.meta.owner == me) {
-                    self.send_snapshot(shared);
-                }
-            }
-            (Topic::Other(topic), Message::Snapshot { replica, .. }) => {
-                self.apply_remote_update(SharedId::from(topic), &replica)
-            }
-            (Topic::Other(topic), Message::Edit { update }) => {
-                self.apply_remote_update(SharedId::from(topic), &update)
-            }
-            (Topic::Session, _) => log::warn!("dropping document message sent to the session"),
-        }
-    }
-
-    fn request_snapshot(&self, id: SharedId) {
-        log::debug!("requesting snapshot of {}", id.fmt_short());
-        let message = Message::SnapshotRequest {
-            nonce: rand::random(),
-        };
-        self.p2p
-            .broadcast(Topic::Other(id.topic()), wire::encode(&message));
-    }
-
-    fn send_snapshot(&self, shared: &Shared) {
-        log::debug!("sending snapshot of {}", shared.meta.label());
-        let message = Message::Snapshot {
-            nonce: rand::random(),
-            replica: shared.replica.encode(),
-        };
-        self.p2p
-            .broadcast(Topic::Other(shared.meta.id.topic()), wire::encode(&message));
-    }
-
-    /// Applies another peer's edit to our copy of the document.
-    fn apply_remote_update(&mut self, id: SharedId, update: &[u8]) {
-        let Some(doc_id) = self.shared_document(id).map(Document::id) else {
-            log::debug!("dropping edit for unknown shared buffer {}", id.fmt_short());
-            return;
-        };
-
-        let view_id = self.get_synced_view_id(doc_id);
-        let doc = doc_mut!(self, &doc_id);
-
-        // By taking out the shared document, we ensure that
-        // the remote edit is not broadcasted again.
-        let Some(mut shared) = doc.shared.take() else {
-            return;
-        };
-        match shared.replica.from_remote(update) {
-            Ok(changes) => {
+                // Take the marker off while applying, so that the hook
+                // doesn't send the remote edit back out as a local one.
+                doc.shared = None;
                 let transaction = Transaction::change(doc.text(), changes.into_iter());
                 doc.apply(&transaction, view_id);
+                doc.shared = Some(id);
             }
-            Err(err) => log::warn!("dropping edit for {}: {err:#}", id.fmt_short()),
+            Event::Unshared { id, reason } => {
+                let Some(doc) = self.documents_mut().find(|doc| doc.shared == Some(id)) else {
+                    return;
+                };
+                doc.shared = None;
+                let name = doc.display_name().into_owned();
+                match reason {
+                    Reason::OwnerUnshared => {
+                        self.set_status(format!("owner stopped sharing {name}"))
+                    }
+                    Reason::TopicLost(reason) => {
+                        self.set_error(format!("stopped sharing {name}: {reason}"))
+                    }
+                }
+            }
+            Event::Left { reason } => {
+                self.clear_shared_markers();
+                match reason {
+                    None => self.set_status("left session"),
+                    Some(reason) => self.set_error(format!("lost session: {reason}")),
+                }
+            }
         }
-        doc.shared = Some(shared);
+    }
+
+    fn clear_shared_markers(&mut self) {
+        for doc in self.documents_mut() {
+            doc.shared = None;
+        }
     }
 }
