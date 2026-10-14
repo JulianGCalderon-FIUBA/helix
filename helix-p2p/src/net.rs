@@ -36,7 +36,6 @@ pub enum Channel {
 #[derive(Debug)]
 pub enum Event {
     Received(Channel, Bytes),
-    /// We left a channel on our own. Leaving the session leaves every channel.
     Exit(Channel, String),
 }
 
@@ -48,7 +47,7 @@ enum Request {
     Subscribe(TopicId, Vec<EndpointId>),
     Unsubscribe(TopicId),
     Broadcast(Channel, Bytes),
-    Leave,
+    Shutdown,
 }
 
 #[derive(Clone)]
@@ -83,22 +82,22 @@ impl Service {
         self.id
     }
 
-    /// Creates a ticket into the current session, starting one if needed.
     pub fn ticket(&self) -> impl Future<Output = String> + 'static {
         let (tx, rx) = oneshot::channel();
         self.send(Request::Ticket(tx));
-        async move { rx.await.expect("actor should reply with a ticket") }
+        async move { rx.await.expect("actor should reply") }
     }
 
-    /// Joins a session. Resolves once we have joined its topic,
-    /// so that what we broadcast from then on reaches someone.
     pub fn join(&self, ticket: String) -> impl Future<Output = Result<()>> + 'static {
         let (tx, rx) = oneshot::channel();
         self.send(Request::Join(ticket, tx));
         async move { rx.await.expect("actor should reply") }
     }
 
-    /// Joins a document's topic, through the peers in `bootstrap`.
+    pub fn shutdown(&self) {
+        self.send(Request::Shutdown);
+    }
+
     pub fn subscribe(&self, topic: TopicId, bootstrap: Vec<EndpointId>) {
         self.send(Request::Subscribe(topic, bootstrap));
     }
@@ -107,18 +106,10 @@ impl Service {
         self.send(Request::Unsubscribe(topic));
     }
 
-    /// Sends to every member of a channel, once we have joined it.
-    /// Delivery is best-effort.
     pub fn broadcast(&self, channel: Channel, message: Bytes) {
         self.send(Request::Broadcast(channel, message));
     }
 
-    /// Leaves the session and every topic.
-    pub fn leave(&self) {
-        self.send(Request::Leave);
-    }
-
-    /// Sends a request to the internal actor.
     fn send(&self, request: Request) {
         self.requests
             .send(request)
@@ -149,8 +140,7 @@ type Events = stream::Boxed<Option<Result<GossipEvent, ApiError>>>;
 
 struct Subscription {
     sender: GossipSender,
-    /// Broadcasts waiting until we have joined the topic, or none once we
-    /// have. Gossip drops a broadcast nobody is there to receive.
+    /// Broadcasts waiting until we have joined the topic. None once we have.
     held: Option<Vec<Bytes>>,
 }
 
@@ -240,7 +230,7 @@ impl Actor {
             }
             Request::Unsubscribe(id) => self.unsubscribe(Channel::Document(id)),
             Request::Broadcast(channel, message) => self.broadcast(channel, message).await,
-            Request::Leave => self.shutdown(),
+            Request::Shutdown => self.shutdown(),
         }
     }
 

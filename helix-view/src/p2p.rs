@@ -73,7 +73,7 @@ impl P2p {
             Transmit::Subscribe(topic, bootstrap) => self.service.subscribe(topic, bootstrap),
             Transmit::Unsubscribe(topic) => self.service.unsubscribe(topic),
             Transmit::Broadcast(channel, message) => self.service.broadcast(channel, message),
-            Transmit::Leave => self.service.leave(),
+            Transmit::Leave => self.service.shutdown(),
         }
     }
 }
