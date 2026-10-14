@@ -192,8 +192,7 @@ pub struct Document {
     // it back as it separated from the edits. We could split out the parts manually but that will
     // be more troublesome.
     pub history: Cell<History>,
-    /// Marks a buffer synced with the session. The session holds its
-    /// replica, but the hooks only see the document, so they need this.
+    /// Present only while the document is shared with a session.
     pub shared: Option<SharedId>,
     pub config: Arc<dyn DynAccess<Config>>,
 
