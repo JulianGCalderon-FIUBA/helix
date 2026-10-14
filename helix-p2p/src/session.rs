@@ -63,7 +63,6 @@ pub enum Event {
 pub enum Transmit {
     Subscribe(TopicId, Vec<EndpointId>),
     Unsubscribe(TopicId),
-    /// Sent once we have joined the topic.
     Broadcast(Channel, Bytes),
     Leave,
 }
@@ -138,8 +137,6 @@ impl Session {
         self.waiting.insert(id, 0);
         self.transmits
             .push_back(Transmit::Subscribe(id.topic(), vec![owner]));
-        // The transport holds this until it has joined the topic. From then
-        // on, the topic's broadcasts reach us, so the snapshot leaves no gap.
         let nonce = self.rng.random();
         self.broadcast(
             Channel::Document(id.topic()),

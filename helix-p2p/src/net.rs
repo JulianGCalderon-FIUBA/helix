@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, future::Future};
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{ensure, Result};
 use bytes::Bytes;
 pub use iroh::EndpointId;
 use iroh::{
@@ -138,12 +138,6 @@ impl Ticket for SessionTicket {
 
 type Events = stream::Boxed<Option<Result<GossipEvent, ApiError>>>;
 
-struct Subscription {
-    sender: GossipSender,
-    /// Broadcasts waiting until we have joined the topic. None once we have.
-    held: Option<Vec<Bytes>>,
-}
-
 /// The Service's internal actor
 struct Actor {
     endpoint: Endpoint,
@@ -154,9 +148,7 @@ struct Actor {
     events: UnboundedSender<Event>,
     /// The session's topic id, if we are in one.
     session: Option<TopicId>,
-    /// Answers a join once we have joined the session topic.
-    joining: Option<oneshot::Sender<Result<()>>>,
-    subscriptions: HashMap<Channel, Subscription>,
+    senders: HashMap<Channel, GossipSender>,
     receivers: StreamMap<Channel, Events>,
 }
 
@@ -190,8 +182,7 @@ impl Actor {
             addresses,
             events,
             session: None,
-            joining: None,
-            subscriptions: HashMap::new(),
+            senders: HashMap::new(),
             receivers: StreamMap::new(),
         }
     }
@@ -207,7 +198,7 @@ impl Actor {
                     };
                     self.handle(request).await;
                 }
-                Some((channel, event)) = self.receivers.next() => self.on_event(channel, event).await,
+                Some((channel, event)) = self.receivers.next() => self.on_event(channel, event),
             }
         }
     }
@@ -217,14 +208,13 @@ impl Actor {
             Request::Ticket(chan) => {
                 let _ = chan.send(self.ticket().await);
             }
-            Request::Join(ticket, chan) => match self.join(&ticket).await {
-                // Answered once we have joined the session topic.
-                Ok(()) => self.joining = Some(chan),
-                Err(err) => {
+            Request::Join(ticket, chan) => {
+                let result = self.join(&ticket).await;
+                if let Err(err) = &result {
                     log::error!("failed to join session: {err:#}");
-                    let _ = chan.send(Err(err));
                 }
-            },
+                let _ = chan.send(result);
+            }
             Request::Subscribe(id, bootstrap) => {
                 self.subscribe(Channel::Document(id), id, bootstrap).await
             }
@@ -276,10 +266,6 @@ impl Actor {
     }
 
     async fn subscribe(&mut self, channel: Channel, id: TopicId, bootstrap: Vec<EndpointId>) {
-        // Without anyone to bootstrap from, we are the first in the topic.
-        // Whoever comes later asks for what they need, so there is nothing
-        // to hold broadcasts for.
-        let held = (!bootstrap.is_empty()).then(Vec::new);
         let subscription = self
             .gossip
             .subscribe(id, bootstrap)
@@ -287,65 +273,38 @@ impl Actor {
             .expect("gossip should be running");
         let (sender, receiver) = subscription.split();
         let events = receiver.map(Some).chain(stream::once(None)).boxed();
-        self.subscriptions
-            .insert(channel, Subscription { sender, held });
+        self.senders.insert(channel, sender);
         self.receivers.insert(channel, events);
     }
 
     fn unsubscribe(&mut self, channel: Channel) {
-        self.subscriptions.remove(&channel);
+        self.senders.remove(&channel);
         self.receivers.remove(&channel);
     }
 
-    /// Sends to every member of a topic, once we have joined it.
-    /// Delivery is best-effort.
+    /// Sends to every member of a topic. Delivery is best-effort.
     async fn broadcast(&mut self, channel: Channel, message: Bytes) {
-        let Some(subscription) = self.subscriptions.get_mut(&channel) else {
+        let Some(sender) = self.senders.get(&channel) else {
             return;
         };
-        if let Some(held) = &mut subscription.held {
-            held.push(message);
-            return;
-        }
 
         log::trace!("broadcasting {} bytes to {channel:?}", message.len());
-        if let Err(err) = subscription.sender.broadcast(message).await {
+        if let Err(err) = sender.broadcast(message).await {
             log::warn!("failed to broadcast: {err:#}");
         }
     }
 
-    /// We have a neighbor in the topic, so its broadcasts reach us,
-    /// and ours reach it.
-    async fn joined(&mut self, channel: Channel) {
-        if channel == Channel::Session {
-            if let Some(chan) = self.joining.take() {
-                let _ = chan.send(Ok(()));
-            }
-        }
-        let held = self
-            .subscriptions
-            .get_mut(&channel)
-            .and_then(|subscription| subscription.held.take());
-        for message in held.into_iter().flatten() {
-            self.broadcast(channel, message).await;
-        }
-    }
-
     fn shutdown(&mut self) {
-        self.subscriptions.clear();
+        self.senders.clear();
         self.receivers.clear();
         self.session.take();
-        if let Some(chan) = self.joining.take() {
-            let _ = chan.send(Err(anyhow!("left the session")));
-        }
         log::info!("shutdown session");
     }
 
-    async fn on_event(&mut self, channel: Channel, event: Option<Result<GossipEvent, ApiError>>) {
+    fn on_event(&mut self, channel: Channel, event: Option<Result<GossipEvent, ApiError>>) {
         match event {
             Some(Ok(GossipEvent::NeighborUp(id))) => {
                 log::info!("connected to {} in {channel:?}", id.fmt_short());
-                self.joined(channel).await;
             }
             Some(Ok(GossipEvent::NeighborDown(id))) => {
                 log::info!("disconnected from {} in {channel:?}", id.fmt_short());
