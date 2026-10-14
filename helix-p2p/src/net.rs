@@ -217,7 +217,11 @@ impl Actor {
             }
             Request::Subscribe(id, bootstrap) => self.subscribe_document(id, bootstrap).await,
             Request::Unsubscribe(id) => self.unsubscribe(Channel::Document(id)),
-            Request::Broadcast(channel, message) => self.broadcast(channel, message).await,
+            Request::Broadcast(channel, message) => {
+                if let Err(err) = self.broadcast(channel, message).await {
+                    log::warn!("failed to broadcast: {err:#}")
+                }
+            }
             Request::Shutdown => self.shutdown(),
         }
     }
@@ -227,8 +231,6 @@ impl Actor {
             Some(topic) => topic,
             None => {
                 let topic = TopicId::from_bytes(rand::random());
-                // We are the first in the session, so there is no one to
-                // wait for.
                 let subscription = self
                     .gossip
                     .subscribe(topic, Vec::new())
@@ -264,8 +266,6 @@ impl Actor {
             topic.fmt_short(),
             bootstrap.fmt_short()
         );
-        // Gossip only sends a broadcast to the neighbors we have at the time,
-        // so wait for one before the session asks for the documents.
         let subscription = self
             .gossip
             .subscribe_and_join(topic, vec![bootstrap])
@@ -276,9 +276,6 @@ impl Actor {
     }
 
     async fn subscribe_document(&mut self, id: TopicId, bootstrap: Vec<EndpointId>) {
-        // When opening a document, wait for a neighbor so that the snapshot
-        // request reaches someone. When sharing it, there is no one to
-        // bootstrap from, and we would wait until someone else opens it.
         let subscription = if bootstrap.is_empty() {
             self.gossip.subscribe(id, bootstrap).await
         } else {
@@ -300,16 +297,14 @@ impl Actor {
         self.receivers.remove(&channel);
     }
 
-    /// Sends to every member of a topic. Delivery is best-effort.
-    async fn broadcast(&mut self, channel: Channel, message: Bytes) {
+    async fn broadcast(&mut self, channel: Channel, message: Bytes) -> Result<()> {
         let Some(sender) = self.senders.get(&channel) else {
-            return;
+            return Ok(());
         };
 
         log::trace!("broadcasting {} bytes to {channel:?}", message.len());
-        if let Err(err) = sender.broadcast(message).await {
-            log::warn!("failed to broadcast: {err:#}");
-        }
+        sender.broadcast(message).await?;
+        Ok(())
     }
 
     fn shutdown(&mut self) {
