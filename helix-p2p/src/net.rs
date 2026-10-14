@@ -266,11 +266,16 @@ impl Actor {
     }
 
     async fn subscribe(&mut self, channel: Channel, id: TopicId, bootstrap: Vec<EndpointId>) {
-        let subscription = self
-            .gossip
-            .subscribe(id, bootstrap)
-            .await
-            .expect("gossip should be running");
+        // Gossip only sends a broadcast to the neighbors we have at the time,
+        // so wait for one before anything goes out. With no one to bootstrap
+        // from, we are the first in the topic, and would wait until someone
+        // else joins.
+        let subscription = if bootstrap.is_empty() {
+            self.gossip.subscribe(id, bootstrap).await
+        } else {
+            self.gossip.subscribe_and_join(id, bootstrap).await
+        }
+        .expect("gossip should be running");
         let (sender, receiver) = subscription.split();
         let events = receiver.map(Some).chain(stream::once(None)).boxed();
         self.senders.insert(channel, sender);
