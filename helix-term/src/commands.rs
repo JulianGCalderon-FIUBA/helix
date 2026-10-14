@@ -51,7 +51,7 @@ use helix_view::{
     info::Info,
     input::KeyEvent,
     keyboard::KeyCode,
-    p2p::session::SharedMeta,
+    p2p::SharedMeta,
     theme::Style,
     tree,
     view::View,

@@ -2480,6 +2480,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "helix-p2p"
+version = "25.7.1"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "helix-core",
+ "iroh",
+ "iroh-gossip",
+ "iroh-tickets",
+ "log",
+ "loro",
+ "n0-future",
+ "postcard",
+ "rand 0.9.5",
+ "serde",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "helix-parsec"
 version = "25.7.1"
 
@@ -2590,7 +2610,6 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "bitflags",
- "bytes",
  "chardetng",
  "clipboard-win",
  "criterion",
@@ -2602,20 +2621,15 @@ dependencies = [
  "helix-event",
  "helix-loader",
  "helix-lsp",
+ "helix-p2p",
  "helix-stdx",
  "helix-tui",
  "helix-vcs",
- "iroh",
- "iroh-gossip",
- "iroh-tickets",
  "kstring",
  "libc",
  "log",
- "loro",
- "n0-future",
  "once_cell",
  "parking_lot",
- "postcard",
  "quickcheck",
  "rand 0.9.5",
  "rustix 1.1.4",

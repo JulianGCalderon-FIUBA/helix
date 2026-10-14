@@ -42,12 +42,13 @@ use helix_core::{
     syntax::{self, config::LanguageConfiguration},
     ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, Syntax, Transaction,
 };
+use helix_p2p::wire::SharedId;
 
 use crate::{
     editor::Config,
     events::{DocumentDidChange, SelectionDidChange},
     expansion,
-    p2p::{session::Shared, wire::SharedId},
+    p2p::Shared,
     view::ViewPosition,
     DocumentId, Editor, Theme, View, ViewId,
 };

@@ -1,20 +1,19 @@
-//! Collaboration session layer, on top of the networking layer.
+//! Glue between the editor and helix-p2p.
 
 use std::path::PathBuf;
 
-use anyhow::{bail, ensure, Result};
-use helix_core::Transaction;
-use helix_event::register_hook;
-
-use super::{
-    crdt::Replica,
-    net::{EndpointId, Event, Service, Topic},
-    wire::{self, Message, SharedId},
-};
 use crate::{
     editor::Action,
     events::{DocumentDidChange, DocumentDidClose},
     Document, DocumentId, Editor,
+};
+use anyhow::{bail, ensure, Result};
+use helix_core::Transaction;
+use helix_event::register_hook;
+use helix_p2p::{
+    crdt::Replica,
+    net::{EndpointId, Event, Service, Topic},
+    wire::{self, Message, SharedId},
 };
 
 /// What the session knows about a shared document, opened or not.
