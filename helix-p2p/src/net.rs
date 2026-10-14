@@ -11,7 +11,7 @@ use iroh::{
 };
 pub use iroh_gossip::TopicId;
 use iroh_gossip::{
-    api::{ApiError, Event as GossipEvent, GossipSender},
+    api::{ApiError, Event as GossipEvent, GossipSender, GossipTopic},
     Gossip, ALPN,
 };
 use iroh_tickets::{ParseError, Ticket};
@@ -215,9 +215,7 @@ impl Actor {
                 }
                 let _ = chan.send(result);
             }
-            Request::Subscribe(id, bootstrap) => {
-                self.subscribe(Channel::Document(id), id, bootstrap).await
-            }
+            Request::Subscribe(id, bootstrap) => self.subscribe_document(id, bootstrap).await,
             Request::Unsubscribe(id) => self.unsubscribe(Channel::Document(id)),
             Request::Broadcast(channel, message) => self.broadcast(channel, message).await,
             Request::Shutdown => self.shutdown(),
@@ -229,7 +227,14 @@ impl Actor {
             Some(topic) => topic,
             None => {
                 let topic = TopicId::from_bytes(rand::random());
-                self.subscribe(Channel::Session, topic, Vec::new()).await;
+                // We are the first in the session, so there is no one to
+                // wait for.
+                let subscription = self
+                    .gossip
+                    .subscribe(topic, Vec::new())
+                    .await
+                    .expect("gossip should be running");
+                self.add_subscription(Channel::Session, subscription);
                 self.session = Some(topic);
                 log::info!("created session {}", topic.fmt_short());
                 topic
@@ -259,23 +264,31 @@ impl Actor {
             topic.fmt_short(),
             bootstrap.fmt_short()
         );
-        self.subscribe(Channel::Session, topic, vec![bootstrap])
-            .await;
+        // Gossip only sends a broadcast to the neighbors we have at the time,
+        // so wait for one before the session asks for the documents.
+        let subscription = self
+            .gossip
+            .subscribe_and_join(topic, vec![bootstrap])
+            .await?;
+        self.add_subscription(Channel::Session, subscription);
         self.session = Some(topic);
         Ok(())
     }
 
-    async fn subscribe(&mut self, channel: Channel, id: TopicId, bootstrap: Vec<EndpointId>) {
-        // Gossip only sends a broadcast to the neighbors we have at the time,
-        // so wait for one before anything goes out. With no one to bootstrap
-        // from, we are the first in the topic, and would wait until someone
-        // else joins.
+    async fn subscribe_document(&mut self, id: TopicId, bootstrap: Vec<EndpointId>) {
+        // When opening a document, wait for a neighbor so that the snapshot
+        // request reaches someone. When sharing it, there is no one to
+        // bootstrap from, and we would wait until someone else opens it.
         let subscription = if bootstrap.is_empty() {
             self.gossip.subscribe(id, bootstrap).await
         } else {
             self.gossip.subscribe_and_join(id, bootstrap).await
         }
         .expect("gossip should be running");
+        self.add_subscription(Channel::Document(id), subscription);
+    }
+
+    fn add_subscription(&mut self, channel: Channel, subscription: GossipTopic) {
         let (sender, receiver) = subscription.split();
         let events = receiver.map(Some).chain(stream::once(None)).boxed();
         self.senders.insert(channel, sender);
