@@ -12,12 +12,13 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use helix_core::{Change, ChangeSet, Operation, Rope};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 use crate::{
     crdt::Replica,
-    net::{Channel, EndpointId, TopicId, Transmit},
+    net::{Channel, EndpointId, TopicId},
     wire::{self, Message, SharedId},
 };
 
@@ -55,6 +56,16 @@ pub enum Event {
     Unshared { id: SharedId, reason: Reason },
     /// We are no longer in the session. No reason means we left on purpose.
     Left { reason: Option<String> },
+}
+
+/// What the transport must do.
+#[derive(Debug)]
+pub enum Transmit {
+    Subscribe(TopicId, Vec<EndpointId>),
+    Unsubscribe(TopicId),
+    /// Sent once we have joined the topic.
+    Broadcast(Channel, Bytes),
+    Leave,
 }
 
 pub struct Session {

@@ -28,20 +28,8 @@ const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 /// A gossip swarm we can be in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Channel {
-    /// Announcements of the session's documents.
     Session,
-    /// Edits and snapshots of one document.
     Document(TopicId),
-}
-
-/// What the transport must do.
-#[derive(Debug)]
-pub enum Transmit {
-    Subscribe(TopicId, Vec<EndpointId>),
-    Unsubscribe(TopicId),
-    /// Sent once we have joined the topic.
-    Broadcast(Channel, Bytes),
-    Leave,
 }
 
 /// What the service tells the editor.
@@ -57,7 +45,10 @@ pub enum Event {
 enum Request {
     Ticket(oneshot::Sender<String>),
     Join(String, oneshot::Sender<Result<()>>),
-    Transmit(Transmit),
+    Subscribe(TopicId, Vec<EndpointId>),
+    Unsubscribe(TopicId),
+    Broadcast(Channel, Bytes),
+    Leave,
 }
 
 #[derive(Clone)]
@@ -107,8 +98,24 @@ impl Service {
         async move { rx.await.expect("actor should reply") }
     }
 
-    pub fn transmit(&self, transmit: Transmit) {
-        self.send(Request::Transmit(transmit));
+    /// Joins a document's topic, through the peers in `bootstrap`.
+    pub fn subscribe(&self, topic: TopicId, bootstrap: Vec<EndpointId>) {
+        self.send(Request::Subscribe(topic, bootstrap));
+    }
+
+    pub fn unsubscribe(&self, topic: TopicId) {
+        self.send(Request::Unsubscribe(topic));
+    }
+
+    /// Sends to every member of a channel, once we have joined it.
+    /// Delivery is best-effort.
+    pub fn broadcast(&self, channel: Channel, message: Bytes) {
+        self.send(Request::Broadcast(channel, message));
+    }
+
+    /// Leaves the session and every topic.
+    pub fn leave(&self) {
+        self.send(Request::Leave);
     }
 
     /// Sends a request to the internal actor.
@@ -228,14 +235,12 @@ impl Actor {
                     let _ = chan.send(Err(err));
                 }
             },
-            Request::Transmit(Transmit::Subscribe(id, bootstrap)) => {
+            Request::Subscribe(id, bootstrap) => {
                 self.subscribe(Channel::Document(id), id, bootstrap).await
             }
-            Request::Transmit(Transmit::Unsubscribe(id)) => self.unsubscribe(Channel::Document(id)),
-            Request::Transmit(Transmit::Broadcast(channel, message)) => {
-                self.broadcast(channel, message).await
-            }
-            Request::Transmit(Transmit::Leave) => self.shutdown(),
+            Request::Unsubscribe(id) => self.unsubscribe(Channel::Document(id)),
+            Request::Broadcast(channel, message) => self.broadcast(channel, message).await,
+            Request::Leave => self.shutdown(),
         }
     }
 

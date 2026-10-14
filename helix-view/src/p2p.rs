@@ -10,7 +10,7 @@ use helix_core::{ChangeSet, Transaction};
 use helix_event::register_hook;
 use helix_p2p::{
     net::{self, Service},
-    session::{Event, Reason, Session, SharedMeta},
+    session::{Event, Reason, Session, SharedMeta, Transmit},
     wire::SharedId,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -66,6 +66,16 @@ impl P2p {
     pub fn documents(&self) -> &HashMap<SharedId, SharedMeta> {
         self.session.documents()
     }
+
+    /// Hands what the session wants sent to the transport.
+    fn transmit(&self, transmit: Transmit) {
+        match transmit {
+            Transmit::Subscribe(topic, bootstrap) => self.service.subscribe(topic, bootstrap),
+            Transmit::Unsubscribe(topic) => self.service.unsubscribe(topic),
+            Transmit::Broadcast(channel, message) => self.service.broadcast(channel, message),
+            Transmit::Leave => self.service.leave(),
+        }
+    }
 }
 
 impl Default for P2p {
@@ -110,7 +120,7 @@ impl Editor {
     /// buffer before anything else can edit it.
     pub(crate) fn drain_p2p(&mut self) {
         while let Some(transmit) = self.p2p.session.poll_transmit() {
-            self.p2p.service.transmit(transmit);
+            self.p2p.transmit(transmit);
         }
         while let Some(event) = self.p2p.session.poll_event() {
             self.apply_p2p_event(event);
