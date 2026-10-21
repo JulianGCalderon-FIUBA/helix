@@ -2500,8 +2500,6 @@ impl Editor {
                 Some(event) = self.debug_adapters.incoming.next() => {
                     return EditorEvent::DebuggerEvent(event)
                 }
-                // Before the transport's events, so that local edits go out
-                // without waiting.
                 Some((id, changes)) = self.p2p.local_changes.recv() => {
                     self.p2p.local_change(id, changes);
                     self.drain_session_queue();

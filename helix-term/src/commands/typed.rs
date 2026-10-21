@@ -3060,8 +3060,8 @@ fn session_close(
         return Ok(());
     }
 
-    // Leaving sets the status once the session says we left.
     cx.editor.with_session(|session| session.shutdown());
+    cx.editor.set_status("closed session");
     Ok(())
 }
 

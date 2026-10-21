@@ -39,16 +39,8 @@ impl SharedMeta {
 /// What the session tells the driver.
 #[derive(Debug)]
 pub enum Event {
-    /// Must be applied to the local copy before the next input
-    /// to keep both copies in sync.
-    Changes {
-        id: SharedId,
-        changes: Vec<Change>,
-    },
-    Unshared {
-        id: SharedId,
-        reason: String,
-    },
+    Changes { id: SharedId, changes: Vec<Change> },
+    Unshared { id: SharedId, reason: String },
 }
 
 /// What the transport must do.
