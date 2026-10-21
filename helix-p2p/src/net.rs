@@ -276,6 +276,7 @@ impl Actor {
     }
 
     async fn subscribe_document(&mut self, id: TopicId, bootstrap: Vec<EndpointId>) {
+        log::info!("subscribing to document {}", id.fmt_short());
         let subscription = if bootstrap.is_empty() {
             self.gossip.subscribe(id, bootstrap).await
         } else {
@@ -295,6 +296,7 @@ impl Actor {
     fn unsubscribe(&mut self, channel: Channel) {
         self.senders.remove(&channel);
         self.receivers.remove(&channel);
+        log::info!("unsubscribed from channel {channel:?}");
     }
 
     async fn broadcast(&mut self, channel: Channel, message: Bytes) -> Result<()> {
@@ -337,7 +339,6 @@ impl Actor {
     }
 
     fn exit(&mut self, channel: Channel, reason: String) {
-        log::error!("exit {channel:?}: {reason}");
         if channel == Channel::Session {
             self.shutdown();
         } else {
