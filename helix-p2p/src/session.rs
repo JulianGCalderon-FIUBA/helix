@@ -73,13 +73,12 @@ impl Session {
         }
     }
 
-    pub fn reset_session(&mut self) {
-        let nonce = self.rng.random();
-        self.documents.clear();
-        self.replicas.clear();
-        self.events.clear();
-        self.transmits.clear();
-        self.broadcast(Channel::Session, &Message::DocumentsRequest { nonce });
+    /// A session we have just joined, which asks for its documents.
+    pub fn joined(me: EndpointId, seed: u64) -> Self {
+        let mut session = Self::new(me, seed);
+        let nonce = session.rng.random();
+        session.broadcast(Channel::Session, &Message::DocumentsRequest { nonce });
+        session
     }
 
     pub fn share(&mut self, path: Option<PathBuf>, text: &Rope) -> SharedId {

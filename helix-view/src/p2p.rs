@@ -156,12 +156,12 @@ impl Editor {
         Ok(())
     }
 
-    /// Reset tbe session
-    /// TODO: The session should be CREATED here. This is weird
+    /// Replaces the session with the one we have just joined.
     pub fn reset_session(&mut self) {
         // Documents from the old session are no longer synced.
         self.clear_shared_markers();
-        self.with_session(|session| session.reset_session())
+        self.p2p.session = Session::joined(self.p2p.service.id(), rand::random());
+        self.drain_session_queue();
     }
 
     fn apply_session_event(&mut self, event: Event) {
