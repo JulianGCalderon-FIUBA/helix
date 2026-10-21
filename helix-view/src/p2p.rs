@@ -2,11 +2,11 @@
 
 use std::collections::HashMap;
 
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use helix_core::{ChangeSet, Transaction};
 use helix_event::register_hook;
 use helix_p2p::{
-    net::{self, Service},
+    net::{self, Channel, Service},
     session::{Event, Session, SharedMeta, Transmit},
     wire::SharedId,
 };
@@ -21,7 +21,8 @@ use crate::{
 
 pub struct P2p {
     pub service: Service,
-    session: Session,
+    /// Present only while we are in a session.
+    session: Option<Session>,
     pub(crate) incoming: UnboundedReceiverStream<net::Event>,
     /// Local changes to shared buffers cannot be applied directly by the hook.
     local_changes_tx: UnboundedSender<(SharedId, ChangeSet)>,
@@ -33,7 +34,7 @@ impl P2p {
         let (service, incoming) = Service::new();
         let (local_changes_tx, local_changes) = unbounded_channel();
         Self {
-            session: Session::new(service.id(), rand::random()),
+            session: None,
             service,
             incoming,
             local_changes_tx,
@@ -41,21 +42,25 @@ impl P2p {
         }
     }
 
-    pub fn session(&mut self) -> &mut Session {
+    pub fn session(&mut self) -> Option<&mut Session> {
         // The session must be up to date before taking any more inputs.
         while let Ok((id, changes)) = self.local_changes.try_recv() {
-            self.session.local_change(id, &changes);
+            if let Some(session) = &mut self.session {
+                session.local_change(id, &changes);
+            }
         }
-        &mut self.session
+        self.session.as_mut()
     }
 
     pub(crate) fn local_change(&mut self, id: SharedId, changes: ChangeSet) {
-        self.session.local_change(id, &changes);
+        if let Some(session) = &mut self.session {
+            session.local_change(id, &changes);
+        }
         self.session();
     }
 
-    pub fn documents(&self) -> &HashMap<SharedId, SharedMeta> {
-        self.session.documents()
+    pub fn documents(&self) -> Option<&HashMap<SharedId, SharedMeta>> {
+        self.session.as_ref().map(Session::documents)
     }
 
     fn transmit(&self, transmit: Transmit) {
@@ -99,17 +104,18 @@ pub fn register_hooks(p2p: &P2p) {
 
 impl Editor {
     /// Gives the session as input and afterwards drains the output queue.
-    pub fn with_session<T>(&mut self, f: impl FnOnce(&mut Session) -> T) -> T {
-        let result = f(self.p2p.session());
+    /// Returns None if we are not in a session.
+    pub fn with_session<T>(&mut self, f: impl FnOnce(&mut Session) -> T) -> Option<T> {
+        let result = f(self.p2p.session()?);
         self.drain_session_queue();
-        result
+        Some(result)
     }
 
     pub(crate) fn drain_session_queue(&mut self) {
-        while let Some(transmit) = self.p2p.session.poll_transmit() {
+        while let Some(transmit) = self.p2p.session.as_mut().and_then(Session::poll_transmit) {
             self.p2p.transmit(transmit);
         }
-        while let Some(event) = self.p2p.session.poll_event() {
+        while let Some(event) = self.p2p.session.as_mut().and_then(Session::poll_event) {
             self.apply_session_event(event);
         }
     }
@@ -117,11 +123,44 @@ impl Editor {
     pub fn handle_p2p_event(&mut self, event: net::Event) {
         match event {
             net::Event::Received(channel, message) => {
-                self.with_session(|session| session.receive(channel, &message))
+                self.with_session(|session| session.receive(channel, &message));
+            }
+            net::Event::Exit(Channel::Session, reason) => {
+                // The transport has already left every topic.
+                self.drop_session();
+                self.set_error(format!("lost session: {reason}"));
             }
             net::Event::Exit(channel, reason) => {
-                self.with_session(|session| session.transport_exit(channel, reason))
+                self.with_session(|session| session.transport_exit(channel, reason));
             }
+        }
+    }
+
+    /// Starts a session, unless we are already in one.
+    pub fn create_session(&mut self) {
+        if self.p2p.session.is_none() {
+            self.p2p.session = Some(Session::new(self.p2p.service.id(), rand::random()));
+        }
+    }
+
+    /// Starts syncing with the session we have just joined.
+    pub fn join_session(&mut self) {
+        self.p2p.session = Some(Session::joined(self.p2p.service.id(), rand::random()));
+        self.drain_session_queue();
+    }
+
+    pub fn leave_session(&mut self) -> Result<()> {
+        self.with_session(Session::shutdown)
+            .context("not in a session")?;
+        self.drop_session();
+        Ok(())
+    }
+
+    fn drop_session(&mut self) {
+        self.p2p.session = None;
+        // Documents are no longer synced.
+        for doc in self.documents_mut() {
+            doc.shared = None;
         }
     }
 
@@ -139,7 +178,9 @@ impl Editor {
         });
         let text = doc.text().clone();
 
-        let id = self.with_session(|session| session.share(path, &text));
+        let id = self
+            .with_session(|session| session.share(path, &text))
+            .context("not in a session")?;
         doc_mut!(self, &doc_id).shared = Some(id);
         Ok(id)
     }
@@ -150,18 +191,11 @@ impl Editor {
             return Ok(());
         }
 
-        self.with_session(|session| session.open(id))?;
+        self.with_session(|session| session.open(id))
+            .context("not in a session")??;
         let doc_id = self.new_file(action);
         doc_mut!(self, &doc_id).shared = Some(id);
         Ok(())
-    }
-
-    /// Replaces the session with the one we have just joined.
-    pub fn reset_session(&mut self) {
-        // Documents from the old session are no longer synced.
-        self.clear_shared_markers();
-        self.p2p.session = Session::joined(self.p2p.service.id(), rand::random());
-        self.drain_session_queue();
     }
 
     fn apply_session_event(&mut self, event: Event) {
@@ -188,12 +222,6 @@ impl Editor {
                 let name = doc.display_name().into_owned();
                 self.set_status(format!("stopped syncing {name}: {reason}"));
             }
-        }
-    }
-
-    fn clear_shared_markers(&mut self) {
-        for doc in self.documents_mut() {
-            doc.shared = None;
         }
     }
 }
