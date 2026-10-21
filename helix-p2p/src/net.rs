@@ -138,7 +138,6 @@ impl Ticket for SessionTicket {
 
 type Events = stream::Boxed<Option<Result<GossipEvent, ApiError>>>;
 
-/// The Service's internal actor
 struct Actor {
     endpoint: Endpoint,
     _router: Router,
@@ -146,7 +145,7 @@ struct Actor {
     /// Addresses learned from tickets.
     addresses: MemoryLookup,
     events: UnboundedSender<Event>,
-    /// The session's topic id, if we are in one.
+    /// Current session, if one.
     session: Option<TopicId>,
     senders: HashMap<Channel, GossipSender>,
     receivers: StreamMap<Channel, Events>,
@@ -187,12 +186,11 @@ impl Actor {
         }
     }
 
-    /// Handles requests and gossip events until the editor is gone.
     async fn run(mut self, mut requests: UnboundedReceiver<Request>) {
         loop {
             tokio::select! {
                 request = requests.recv() => {
-                    // Every Service handle is gone, so the editor is too.
+                    // If every service handle is gone, we exit.
                     let Some(request) = request else {
                         break;
                     };
@@ -210,9 +208,6 @@ impl Actor {
             }
             Request::Join(ticket, chan) => {
                 let result = self.join(&ticket).await;
-                if let Err(err) = &result {
-                    log::error!("failed to join session: {err:#}");
-                }
                 let _ = chan.send(result);
             }
             Request::Subscribe(id, bootstrap) => self.subscribe_document(id, bootstrap).await,
