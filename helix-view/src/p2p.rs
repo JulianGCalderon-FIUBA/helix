@@ -10,7 +10,7 @@ use helix_core::{ChangeSet, Transaction};
 use helix_event::register_hook;
 use helix_p2p::{
     net::{self, Service},
-    session::{Event, Reason, Session, SharedMeta, Transmit},
+    session::{Event, Session, SharedMeta, Transmit},
     wire::SharedId,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -73,7 +73,7 @@ impl P2p {
             Transmit::Subscribe(topic, bootstrap) => self.service.subscribe(topic, bootstrap),
             Transmit::Unsubscribe(topic) => self.service.unsubscribe(topic),
             Transmit::Broadcast(channel, message) => self.service.broadcast(channel, message),
-            Transmit::Leave => self.service.shutdown(),
+            Transmit::Shutdown => self.service.shutdown(),
         }
     }
 }
@@ -134,7 +134,7 @@ impl Editor {
                 self.p2p_input(|session| session.receive(channel, &message))
             }
             net::Event::Exit(channel, reason) => {
-                self.p2p_input(|session| session.exited(channel, reason))
+                self.p2p_input(|session| session.transport_exit(channel, reason))
             }
         }
     }
@@ -180,7 +180,7 @@ impl Editor {
     pub fn join_session(&mut self) {
         // Documents from the old session are no longer synced.
         self.clear_shared_markers();
-        self.p2p.session = Session::joined(self.p2p.service.id(), rand::random());
+        self.p2p.session.request_documents();
         self.drain_p2p();
     }
 
@@ -206,21 +206,7 @@ impl Editor {
                 };
                 doc.shared = None;
                 let name = doc.display_name().into_owned();
-                match reason {
-                    Reason::OwnerUnshared => {
-                        self.set_status(format!("owner stopped sharing {name}"))
-                    }
-                    Reason::TopicLost(reason) => {
-                        self.set_error(format!("stopped sharing {name}: {reason}"))
-                    }
-                }
-            }
-            Event::Left { reason } => {
-                self.clear_shared_markers();
-                match reason {
-                    None => self.set_status("left session"),
-                    Some(reason) => self.set_error(format!("lost session: {reason}")),
-                }
+                self.set_status(format!("stopped syncing {name}: {reason}"));
             }
         }
     }

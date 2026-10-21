@@ -3061,7 +3061,7 @@ fn session_close(
     }
 
     // Leaving sets the status once the session says we left.
-    cx.editor.p2p_input(|session| session.leave());
+    cx.editor.p2p_input(|session| session.shutdown());
     Ok(())
 }
 
