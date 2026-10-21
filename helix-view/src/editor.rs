@@ -2504,7 +2504,7 @@ impl Editor {
                 // without waiting.
                 Some((id, changes)) = self.p2p.local_changes.recv() => {
                     self.p2p.local_change(id, changes);
-                    self.drain_p2p();
+                    self.drain_session_queue();
                 }
                 Some(event) = self.p2p.incoming.next() => {
                     return EditorEvent::P2pEvent(event)

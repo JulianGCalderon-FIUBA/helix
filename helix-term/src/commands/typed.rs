@@ -3004,7 +3004,7 @@ fn session_join(
         Ok(job::Callback::Editor(Box::new(
             move |editor: &mut Editor| match result {
                 Ok(()) => {
-                    editor.join_session();
+                    editor.reset_session();
                     editor.set_status("joined session");
                 }
                 Err(err) => editor.set_error(format!("failed to join session: {err:#}")),
@@ -3061,7 +3061,7 @@ fn session_close(
     }
 
     // Leaving sets the status once the session says we left.
-    cx.editor.p2p_input(|session| session.shutdown());
+    cx.editor.with_session(|session| session.shutdown());
     Ok(())
 }
 

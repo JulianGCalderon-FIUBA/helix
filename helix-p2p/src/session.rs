@@ -81,8 +81,12 @@ impl Session {
         }
     }
 
-    pub fn request_documents(&mut self) {
+    pub fn reset_session(&mut self) {
         let nonce = self.rng.random();
+        self.documents.clear();
+        self.replicas.clear();
+        self.events.clear();
+        self.transmits.clear();
         self.broadcast(Channel::Session, &Message::DocumentsRequest { nonce });
     }
 
