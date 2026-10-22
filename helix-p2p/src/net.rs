@@ -428,6 +428,7 @@ impl Actor {
     }
 
     fn exit(&mut self, channel: Channel, reason: String) {
+        log::error!("lost {channel}: {reason}");
         match channel {
             Channel::Session => self.shutdown(),
             Channel::Document(_) => self.unsubscribe(channel),
