@@ -44,6 +44,7 @@ use helix_core::{
     visual_offset_from_block, Deletion, LineEnding, Position, Range, Rope, RopeReader, RopeSlice,
     Selection, SmallVec, Syntax, Tendril, Transaction,
 };
+use helix_p2p::session::SharedMeta;
 use helix_view::{
     document::{FormatterError, Mode, SCRATCH_BUFFER_NAME},
     editor::{Action, Motion},
@@ -51,7 +52,6 @@ use helix_view::{
     info::Info,
     input::KeyEvent,
     keyboard::KeyCode,
-    p2p::session::SharedMeta,
     theme::Style,
     tree,
     view::View,
@@ -3399,7 +3399,7 @@ fn buffer_picker(cx: &mut Context) {
 
 /// Opens a picker of every buffer shared in the collaborative session
 fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
-    let items = editor.shared_files.values().cloned().collect::<Vec<_>>();
+    let items = editor.p2p.documents().values().cloned().collect::<Vec<_>>();
 
     let columns = [
         PickerColumn::new("owner", |meta: &SharedMeta, _| {

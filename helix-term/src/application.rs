@@ -131,8 +131,8 @@ impl Application {
             handlers,
             workspace_trust,
         );
-        // Register here because we need access to the p2p service.
-        p2p::session::register_hooks(editor.p2p.clone());
+        // Register here because we need access to the local-edit queue.
+        p2p::register_hooks(&editor.p2p);
         Self::load_configured_theme(&mut editor, &config.load(), &mut terminal, theme_mode);
 
         let keys = Box::new(Map::new(Arc::clone(&config), |config: &Config| {

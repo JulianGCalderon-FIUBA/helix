@@ -1344,10 +1344,7 @@ pub struct Editor {
     pub mouse_down_range: Option<Range>,
     pub cursor_cache: CursorCache,
     pub workspace_trust: WorkspaceTrust,
-    pub p2p: p2p::net::Service,
-    p2p_incoming: UnboundedReceiverStream<p2p::net::Event>,
-    /// Every document announced to the session, opened or not.
-    pub shared_files: HashMap<p2p::wire::SharedId, p2p::session::SharedMeta>,
+    pub p2p: p2p::P2p,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1358,7 +1355,7 @@ pub enum EditorEvent {
     ConfigEvent(ConfigEvent),
     LanguageServerMessage((LanguageServerId, Call)),
     DebuggerEvent((DebugAdapterId, dap::Payload)),
-    P2pEvent(p2p::net::Event),
+    P2pEvent(helix_p2p::net::Event),
     IdleTimer,
     Redraw,
 }
@@ -1428,8 +1425,6 @@ impl Editor {
         let conf = config.load();
         let auto_pairs = (&conf.auto_pairs).into();
 
-        let (p2p, p2p_incoming) = p2p::net::Service::new();
-
         // HAXX: offset the render area height by 1 to account for prompt/commandline
         area.height -= 1;
 
@@ -1476,9 +1471,7 @@ impl Editor {
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
             workspace_trust,
-            p2p,
-            p2p_incoming,
-            shared_files: HashMap::new(),
+            p2p: p2p::P2p::new(),
         }
     }
 
@@ -2507,7 +2500,11 @@ impl Editor {
                 Some(event) = self.debug_adapters.incoming.next() => {
                     return EditorEvent::DebuggerEvent(event)
                 }
-                Some(event) = self.p2p_incoming.next() => {
+                Some((id, changes)) = self.p2p.local_changes.recv() => {
+                    self.p2p.local_change(id, changes);
+                    self.drain_session_queue();
+                }
+                Some(event) = self.p2p.incoming.next() => {
                     return EditorEvent::P2pEvent(event)
                 }
 

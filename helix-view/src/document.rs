@@ -42,12 +42,12 @@ use helix_core::{
     syntax::{self, config::LanguageConfiguration},
     ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, Syntax, Transaction,
 };
+use helix_p2p::wire::SharedId;
 
 use crate::{
     editor::Config,
     events::{DocumentDidChange, SelectionDidChange},
     expansion,
-    p2p::{session::Shared, wire::SharedId},
     view::ViewPosition,
     DocumentId, Editor, Theme, View, ViewId,
 };
@@ -193,7 +193,7 @@ pub struct Document {
     // be more troublesome.
     pub history: Cell<History>,
     /// Present only while the document is shared with a session.
-    pub shared: Option<Shared>,
+    pub shared: Option<SharedId>,
     pub config: Arc<dyn DynAccess<Config>>,
 
     savepoints: Vec<Weak<SavePoint>>,
@@ -2062,10 +2062,6 @@ impl Document {
     /// File path on disk.
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
-    }
-
-    pub fn shared_id(&self) -> Option<SharedId> {
-        self.shared.as_ref().map(|shared| shared.meta.id)
     }
 
     /// File path as a URL.
