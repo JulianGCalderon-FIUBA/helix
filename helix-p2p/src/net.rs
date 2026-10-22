@@ -249,17 +249,7 @@ impl Actor {
         let endpoint = self.endpoint.clone();
         let events = self.events.clone();
         tokio::spawn(async move {
-            let response = async {
-                let connection = endpoint.connect(peer, REQUEST_ALPN).await?;
-                let (mut send, mut recv) = connection.open_bi().await?;
-                send.write_all(&message).await?;
-                send.finish()?;
-                let response = recv.read_to_end(MAX_MESSAGE_SIZE).await?;
-                // We close once we have read everything, since the peer waits for it.
-                connection.close(0u32.into(), b"done");
-                anyhow::Ok(Bytes::from(response))
-            }
-            .await;
+            let response = request(&endpoint, peer, &message).await;
             let _ = events.send(Event::Response(message, response));
         });
     }
@@ -385,6 +375,17 @@ impl Actor {
         }
         let _ = self.events.send(Event::Exit(channel, reason));
     }
+}
+
+async fn request(endpoint: &Endpoint, peer: EndpointId, message: &[u8]) -> Result<Bytes> {
+    let connection = endpoint.connect(peer, REQUEST_ALPN).await?;
+    let (mut send, mut recv) = connection.open_bi().await?;
+    send.write_all(message).await?;
+    send.finish()?;
+    let response = recv.read_to_end(MAX_MESSAGE_SIZE).await?;
+    // We close once we have read everything, since the peer waits for it.
+    connection.close(0u32.into(), b"done");
+    Ok(response.into())
 }
 
 /// Protocol for request/response communication between peers.
