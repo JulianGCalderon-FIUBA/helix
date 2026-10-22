@@ -13,10 +13,6 @@ use super::net::{EndpointId, TopicId};
 pub struct SharedId(TopicId);
 
 impl SharedId {
-    pub fn random() -> Self {
-        Self(TopicId::from_bytes(rand::random()))
-    }
-
     pub fn topic(&self) -> TopicId {
         self.0
     }
