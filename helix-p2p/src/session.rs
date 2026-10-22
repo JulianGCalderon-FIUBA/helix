@@ -60,7 +60,6 @@ pub struct Session {
     replicas: HashMap<SharedId, Replica>,
     /// The documents whose snapshots we requested, by request id.
     requests: HashMap<u64, SharedId>,
-    next_request: u64,
     events: VecDeque<Event>,
     transmits: VecDeque<Transmit>,
 }
@@ -74,7 +73,6 @@ impl Session {
             documents: HashMap::new(),
             replicas: HashMap::new(),
             requests: HashMap::new(),
-            next_request: 0,
             events: VecDeque::new(),
             transmits: VecDeque::new(),
         }
@@ -117,8 +115,7 @@ impl Session {
         self.replicas.insert(id, Replica::empty());
         self.transmits
             .push_back(Transmit::Subscribe(id.topic(), vec![owner]));
-        let request = self.next_request;
-        self.next_request += 1;
+        let request = self.rng.random();
         self.requests.insert(request, id);
         self.transmits.push_back(Transmit::Request(
             request,
