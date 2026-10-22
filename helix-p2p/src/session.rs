@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use bytes::Bytes;
 use helix_core::{Change, ChangeSet, Rope};
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -15,7 +15,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use crate::{
     crdt::Replica,
     net::{Channel, EndpointId, TopicId},
-    wire::{self, Message, SharedId},
+    wire::{self, Message, Request, Response, SharedId},
 };
 
 /// Metadata about a shared document, opened or not.
@@ -123,16 +123,14 @@ impl Session {
         self.transmits.push_back(Transmit::Request(
             request,
             owner,
-            wire::encode(&Message::SnapshotRequest { id }),
+            wire::encode(&Request::Snapshot { id }),
         ));
         Ok(())
     }
 
     /// Answer a peer's request.
     pub fn respond(&self, request: &[u8]) -> Result<Bytes> {
-        let Message::SnapshotRequest { id } = wire::decode(request)? else {
-            bail!("unexpected request");
-        };
+        let Request::Snapshot { id } = wire::decode(request)?;
         // Only the owner answers.
         ensure!(self.owns(id), "{} is not ours", id.fmt_short());
         let replica = self
@@ -142,7 +140,7 @@ impl Session {
 
         log::debug!("sending snapshot of {}", id.fmt_short());
         let replica = replica.encode();
-        Ok(wire::encode(&Message::Snapshot { replica }))
+        Ok(wire::encode(&Response::Snapshot { replica }))
     }
 
     /// Receive the answer to one of our requests.
@@ -150,9 +148,9 @@ impl Session {
         let Some(id) = self.requests.remove(&request) else {
             return;
         };
-        let replica = response.and_then(|response| match wire::decode(&response)? {
-            Message::Snapshot { replica } => Ok(replica),
-            response => bail!("unexpected response {response:?}"),
+        let replica = response.and_then(|response| {
+            let Response::Snapshot { replica } = wire::decode(&response)?;
+            Ok(replica)
         });
         match replica {
             Ok(replica) => self.remote_change(id, &replica),
@@ -211,7 +209,7 @@ impl Session {
 
     /// Receive data from the network layer
     pub fn receive(&mut self, channel: Channel, message: &[u8]) {
-        let message = match wire::decode(message) {
+        let message: Message = match wire::decode(message) {
             Ok(message) => message,
             Err(err) => {
                 log::warn!("dropping malformed message: {err:#}");
