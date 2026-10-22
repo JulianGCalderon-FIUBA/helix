@@ -6,8 +6,10 @@ use anyhow::{ensure, Result};
 use bytes::Bytes;
 pub use iroh::EndpointId;
 use iroh::{
-    address_lookup::memory::MemoryLookup, endpoint::presets, protocol::Router, Endpoint,
-    EndpointAddr, SecretKey,
+    address_lookup::memory::MemoryLookup,
+    endpoint::{presets, Connection},
+    protocol::{AcceptError, ProtocolHandler, Router},
+    Endpoint, EndpointAddr, SecretKey,
 };
 pub use iroh_gossip::TopicId;
 use iroh_gossip::{
@@ -25,11 +27,17 @@ use tokio_stream::{wrappers::UnboundedReceiverStream, StreamMap};
 
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
-/// A gossip swarm we can be in.
+const PEER_ALPN: &[u8] = b"helix/peer/0";
+
+/// Where messages go to and come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Channel {
+    /// The session's gossip swarm.
     Session,
+    /// A document's gossip swarm.
     Document(TopicId),
+    /// A direct connection to a single peer.
+    Peer(EndpointId),
 }
 
 /// What the service tells the editor.
@@ -46,7 +54,7 @@ enum Request {
     Join(String, oneshot::Sender<Result<()>>),
     Subscribe(TopicId, Vec<EndpointId>),
     Unsubscribe(TopicId),
-    Broadcast(Channel, Bytes),
+    Send(Channel, Bytes),
     Shutdown,
 }
 
@@ -84,33 +92,33 @@ impl Service {
 
     pub fn ticket(&self) -> impl Future<Output = String> + 'static {
         let (tx, rx) = oneshot::channel();
-        self.send(Request::Ticket(tx));
+        self.request(Request::Ticket(tx));
         async move { rx.await.expect("actor should reply") }
     }
 
     pub fn join(&self, ticket: String) -> impl Future<Output = Result<()>> + 'static {
         let (tx, rx) = oneshot::channel();
-        self.send(Request::Join(ticket, tx));
+        self.request(Request::Join(ticket, tx));
         async move { rx.await.expect("actor should reply") }
     }
 
     pub fn shutdown(&self) {
-        self.send(Request::Shutdown);
+        self.request(Request::Shutdown);
     }
 
     pub fn subscribe(&self, topic: TopicId, bootstrap: Vec<EndpointId>) {
-        self.send(Request::Subscribe(topic, bootstrap));
+        self.request(Request::Subscribe(topic, bootstrap));
     }
 
     pub fn unsubscribe(&self, topic: TopicId) {
-        self.send(Request::Unsubscribe(topic));
+        self.request(Request::Unsubscribe(topic));
     }
 
-    pub fn broadcast(&self, channel: Channel, message: Bytes) {
-        self.send(Request::Broadcast(channel, message));
+    pub fn send(&self, channel: Channel, message: Bytes) {
+        self.request(Request::Send(channel, message));
     }
 
-    fn send(&self, request: Request) {
+    fn request(&self, request: Request) {
         self.requests
             .send(request)
             .expect("internal actor should be running");
@@ -137,6 +145,7 @@ impl Ticket for SessionTicket {
 }
 
 type Events = stream::Boxed<Option<Result<GossipEvent, ApiError>>>;
+type PeerMessages = stream::Boxed<Result<Bytes>>;
 
 struct Actor {
     endpoint: Endpoint,
@@ -149,6 +158,10 @@ struct Actor {
     session: Option<TopicId>,
     senders: HashMap<Channel, GossipSender>,
     receivers: StreamMap<Channel, Events>,
+    /// Connections that peers opened to us.
+    incoming: UnboundedReceiver<Connection>,
+    peers: HashMap<EndpointId, Connection>,
+    peer_messages: StreamMap<EndpointId, PeerMessages>,
 }
 
 impl Actor {
@@ -164,8 +177,15 @@ impl Actor {
         let gossip = Gossip::builder()
             .max_message_size(MAX_MESSAGE_SIZE)
             .spawn(endpoint.clone());
+        let (incoming_tx, incoming) = unbounded_channel();
         let router = Router::builder(endpoint.clone())
             .accept(ALPN, gossip.clone())
+            .accept(
+                PEER_ALPN,
+                PeerProtocol {
+                    connections: incoming_tx,
+                },
+            )
             .spawn();
 
         let addresses = MemoryLookup::new();
@@ -183,6 +203,9 @@ impl Actor {
             session: None,
             senders: HashMap::new(),
             receivers: StreamMap::new(),
+            incoming,
+            peers: HashMap::new(),
+            peer_messages: StreamMap::new(),
         }
     }
 
@@ -197,6 +220,10 @@ impl Actor {
                     self.handle(request).await;
                 }
                 Some((channel, event)) = self.receivers.next() => self.on_event(channel, event),
+                Some(connection) = self.incoming.recv() => self.add_peer(connection),
+                Some((peer, message)) = self.peer_messages.next() => {
+                    self.on_peer_message(peer, message)
+                }
             }
         }
     }
@@ -212,7 +239,12 @@ impl Actor {
             }
             Request::Subscribe(id, bootstrap) => self.subscribe_document(id, bootstrap).await,
             Request::Unsubscribe(id) => self.unsubscribe(Channel::Document(id)),
-            Request::Broadcast(channel, message) => {
+            Request::Send(Channel::Peer(peer), message) => {
+                if let Err(err) = self.send_to_peer(peer, message).await {
+                    self.exit(Channel::Peer(peer), format!("failed to send: {err:#}"));
+                }
+            }
+            Request::Send(channel, message) => {
                 if let Err(err) = self.broadcast(channel, message).await {
                     log::warn!("failed to broadcast: {err:#}")
                 }
@@ -295,6 +327,43 @@ impl Actor {
         log::info!("unsubscribed from channel {channel:?}");
     }
 
+    async fn send_to_peer(&mut self, peer: EndpointId, message: Bytes) -> Result<()> {
+        let connection = match self.peers.get(&peer) {
+            Some(connection) => connection.clone(),
+            None => {
+                // Wait until connected. This can stall the actor.
+                let connection = self.endpoint.connect(peer, PEER_ALPN).await?;
+                self.add_peer(connection.clone());
+                connection
+            }
+        };
+
+        log::trace!("sending {} bytes to {}", message.len(), peer.fmt_short());
+        let mut send = connection.open_uni().await?;
+        send.write_all(&message).await?;
+        send.finish()?;
+        Ok(())
+    }
+
+    /// Each message comes in its own stream, so it needs no framing.
+    fn add_peer(&mut self, connection: Connection) {
+        let peer = connection.remote_id();
+        log::info!("connected to peer {}", peer.fmt_short());
+        let messages = stream::unfold(connection.clone(), |connection| async move {
+            Some((receive_from_peer(&connection).await, connection))
+        })
+        .boxed();
+        // If we both connect at once, we keep the latest connection.
+        self.peers.insert(peer, connection);
+        self.peer_messages.insert(peer, messages);
+    }
+
+    fn disconnect(&mut self, peer: EndpointId) {
+        self.peers.remove(&peer);
+        self.peer_messages.remove(&peer);
+        log::info!("disconnected from peer {}", peer.fmt_short());
+    }
+
     async fn broadcast(&mut self, channel: Channel, message: Bytes) -> Result<()> {
         let Some(sender) = self.senders.get(&channel) else {
             return Ok(());
@@ -308,6 +377,8 @@ impl Actor {
     fn shutdown(&mut self) {
         self.senders.clear();
         self.receivers.clear();
+        self.peers.clear();
+        self.peer_messages.clear();
         self.session.take();
         log::info!("shutdown session");
     }
@@ -334,12 +405,43 @@ impl Actor {
         }
     }
 
+    fn on_peer_message(&mut self, peer: EndpointId, message: Result<Bytes>) {
+        match message {
+            Ok(message) => {
+                log::trace!("received {} bytes from {}", message.len(), peer.fmt_short());
+                let _ = self
+                    .events
+                    .send(Event::Received(Channel::Peer(peer), message));
+            }
+            Err(err) => self.exit(Channel::Peer(peer), format!("connection lost: {err:#}")),
+        }
+    }
+
     fn exit(&mut self, channel: Channel, reason: String) {
-        if channel == Channel::Session {
-            self.shutdown();
-        } else {
-            self.unsubscribe(channel);
+        match channel {
+            Channel::Session => self.shutdown(),
+            Channel::Document(_) => self.unsubscribe(channel),
+            Channel::Peer(peer) => self.disconnect(peer),
         }
         let _ = self.events.send(Event::Exit(channel, reason));
+    }
+}
+
+async fn receive_from_peer(connection: &Connection) -> Result<Bytes> {
+    let mut recv = connection.accept_uni().await?;
+    Ok(recv.read_to_end(MAX_MESSAGE_SIZE).await?.into())
+}
+
+/// Hands the connections that peers open to us to the actor.
+#[derive(Debug, Clone)]
+struct PeerProtocol {
+    connections: UnboundedSender<Connection>,
+}
+
+impl ProtocolHandler for PeerProtocol {
+    async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
+        // The actor keeps the connection open after we return.
+        let _ = self.connections.send(connection);
+        Ok(())
     }
 }

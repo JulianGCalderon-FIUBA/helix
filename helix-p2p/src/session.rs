@@ -48,7 +48,7 @@ pub enum Event {
 pub enum Transmit {
     Subscribe(TopicId, Vec<EndpointId>),
     Unsubscribe(TopicId),
-    Broadcast(Channel, Bytes),
+    Send(Channel, Bytes),
     Shutdown,
 }
 
@@ -146,6 +146,7 @@ impl Session {
                     });
                 }
             }
+            Channel::Peer(_) => {}
         }
     }
 
@@ -259,7 +260,7 @@ impl Session {
 
     fn broadcast(&mut self, channel: Channel, message: &Message) {
         self.transmits
-            .push_back(Transmit::Broadcast(channel, wire::encode(message)));
+            .push_back(Transmit::Send(channel, wire::encode(message)));
     }
 
     pub fn poll_event(&mut self) -> Option<Event> {
