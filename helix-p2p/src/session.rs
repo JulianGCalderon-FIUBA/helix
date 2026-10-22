@@ -223,7 +223,7 @@ impl Session {
             (Channel::Document(topic), GossipMessage::Edit { update }) => {
                 self.remote_change(SharedId::from(topic), &update)
             }
-            (channel, _) => log::warn!("dropping message sent to the wrong channel {channel:?}"),
+            (channel, _) => log::warn!("dropping message sent to the wrong channel: {channel}"),
         }
     }
 

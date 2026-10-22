@@ -1,6 +1,6 @@
 //! The transport layer moves opaque bytes between peers.
 
-use std::{collections::HashMap, future::Future};
+use std::{collections::HashMap, fmt, future::Future};
 
 use anyhow::{ensure, Result};
 use bytes::Bytes;
@@ -38,6 +38,17 @@ pub enum Channel {
     Document(TopicId),
     /// A direct connection to a single peer.
     Peer(EndpointId),
+}
+
+// Ids are long, so logs print them short.
+impl fmt::Display for Channel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Channel::Session => write!(f, "session"),
+            Channel::Document(topic) => write!(f, "document {}", topic.fmt_short()),
+            Channel::Peer(peer) => write!(f, "peer {}", peer.fmt_short()),
+        }
+    }
 }
 
 /// What the service tells the editor.
@@ -324,7 +335,7 @@ impl Actor {
     fn unsubscribe(&mut self, channel: Channel) {
         self.senders.remove(&channel);
         self.receivers.remove(&channel);
-        log::info!("unsubscribed from channel {channel:?}");
+        log::info!("unsubscribed from {channel}");
     }
 
     async fn send_to_peer(&mut self, peer: EndpointId, message: Bytes) -> Result<()> {
@@ -368,7 +379,7 @@ impl Actor {
             return Ok(());
         };
 
-        log::trace!("broadcasting {} bytes to {channel:?}", message.len());
+        log::trace!("broadcasting {} bytes to {channel}", message.len());
         sender.broadcast(message).await?;
         Ok(())
     }
@@ -385,14 +396,14 @@ impl Actor {
     fn on_event(&mut self, channel: Channel, event: Option<Result<GossipEvent, ApiError>>) {
         match event {
             Some(Ok(GossipEvent::NeighborUp(id))) => {
-                log::info!("connected to {} in {channel:?}", id.fmt_short());
+                log::info!("connected to {} in {channel}", id.fmt_short());
             }
             Some(Ok(GossipEvent::NeighborDown(id))) => {
-                log::info!("disconnected from {} in {channel:?}", id.fmt_short());
+                log::info!("disconnected from {} in {channel}", id.fmt_short());
             }
             Some(Ok(GossipEvent::Received(message))) => {
                 log::trace!(
-                    "received {} bytes from {} in {channel:?}",
+                    "received {} bytes from {} in {channel}",
                     message.content.len(),
                     message.delivered_from.fmt_short()
                 );
