@@ -98,6 +98,10 @@ impl EditorView {
             decorations.add_decoration(Self::cursorline(doc, view, theme));
         }
 
+        if doc.shared.is_some() {
+            decorations.add_decoration(text_decorations::PeerSelections::new(doc));
+        }
+
         if is_focused && config.cursorcolumn {
             Self::highlight_cursorcolumn(doc, view, surface, theme, inner, &text_annotations);
         }

@@ -1,8 +1,11 @@
 use std::cmp::Ordering;
 
 use helix_core::doc_formatter::FormattedGrapheme;
-use helix_core::Position;
+use helix_core::{Position, Selection};
+use helix_p2p::net::EndpointId;
 use helix_view::editor::CursorCache;
+use helix_view::graphics::{Color, Rect, Style};
+use helix_view::Document;
 
 use crate::ui::document::{LinePos, TextRenderer};
 
@@ -171,4 +174,95 @@ impl Decoration for Cursor<'_> {
         }
         usize::MAX
     }
+}
+
+/// Draws the selections of peers in a shared document.
+///
+/// Their colours are not part of the theme, so they can't be overlay
+/// highlights. Instead, the background is set before each grapheme is drawn,
+/// so that the text and our own selection are drawn on top.
+pub struct PeerSelections<'a> {
+    /// Each peer's selection, with the style of its primary and other ranges.
+    selections: Vec<(&'a Selection, Style, Style)>,
+}
+
+impl<'a> PeerSelections<'a> {
+    pub fn new(doc: &'a Document) -> Self {
+        let selections = doc
+            .peer_selections
+            .iter()
+            .map(|(peer, selection)| {
+                let primary = Style::default().bg(peer_color(*peer, 0.35));
+                let secondary = Style::default().bg(peer_color(*peer, 0.2));
+                (selection, primary, secondary)
+            })
+            .collect();
+        Self { selections }
+    }
+
+    fn style_at(&self, char_idx: usize) -> Option<Style> {
+        self.selections
+            .iter()
+            .find_map(|(selection, primary, secondary)| {
+                // Ranges are sorted and don't overlap.
+                let ranges = selection.ranges();
+                let i = ranges.partition_point(|range| range.to() <= char_idx);
+                let range = ranges.get(i)?;
+                (range.from() <= char_idx).then(|| {
+                    if i == selection.primary_index() {
+                        *primary
+                    } else {
+                        *secondary
+                    }
+                })
+            })
+    }
+}
+
+impl Decoration for PeerSelections<'_> {
+    fn reset_pos(&mut self, pos: usize) -> usize {
+        pos
+    }
+
+    fn decorate_grapheme(
+        &mut self,
+        renderer: &mut TextRenderer,
+        grapheme: &FormattedGrapheme,
+    ) -> usize {
+        let pos = grapheme.visual_pos;
+        if let Some(style) = self.style_at(grapheme.char_idx) {
+            if renderer.column_in_bounds(pos.col, grapheme.width()) {
+                let x = renderer.viewport.x + (pos.col - renderer.offset.col) as u16;
+                let area = Rect::new(x, pos.row as u16, grapheme.width() as u16, 1);
+                renderer.set_style(area, style);
+            }
+        }
+        // Ask for the next grapheme. Virtual text shares its index with the
+        // grapheme after it, which then goes undecorated, since asking for
+        // the same index again would loop forever.
+        grapheme.char_idx + 1
+    }
+}
+
+/// The hue comes from the peer's id, so every editor draws a peer
+/// in the same colour.
+fn peer_color(peer: EndpointId, lightness: f32) -> Color {
+    let [a, b, ..] = *peer.as_bytes();
+    let hue = u16::from_le_bytes([a, b]) as f32 / 65536.0 * 6.0;
+    let saturation = 0.6;
+
+    // HSL to RGB.
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let x = chroma * (1.0 - (hue % 2.0 - 1.0).abs());
+    let (r, g, b) = match hue as u8 {
+        0 => (chroma, x, 0.0),
+        1 => (x, chroma, 0.0),
+        2 => (0.0, chroma, x),
+        3 => (0.0, x, chroma),
+        4 => (x, 0.0, chroma),
+        _ => (chroma, 0.0, x),
+    };
+    let m = lightness - chroma / 2.0;
+    let channel = |v: f32| ((v + m) * 255.0).round() as u8;
+    Color::Rgb(channel(r), channel(g), channel(b))
 }
