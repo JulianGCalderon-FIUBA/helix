@@ -275,6 +275,7 @@ impl Actor {
         let subscription = if bootstrap.is_empty() {
             self.gossip.subscribe(id, bootstrap).await
         } else {
+            // Wait until connected to a peer. This can stall the actor.
             self.gossip.subscribe_and_join(id, bootstrap).await
         }
         .expect("gossip should be running");
