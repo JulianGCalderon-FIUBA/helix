@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use bytes::Bytes;
 use helix_core::{Change, ChangeSet, Rope};
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -108,10 +108,8 @@ impl Session {
         log::info!("opening {}", meta.label());
         let owner = meta.owner;
 
-        // We subscribe before asking for the snapshot, so that no edit made
-        // after it is missed. Edits that arrive before it need no queue:
-        // the replica keeps them pending until the snapshot fills in their
-        // dependencies, and then applies them.
+        // Subscribe first, so that no edit after the snapshot is missed.
+        // Loro holds edits that arrive before the snapshot until it does.
         self.replicas.insert(id, Replica::empty());
         self.transmits
             .push_back(Transmit::Subscribe(id.topic(), vec![owner]));
@@ -122,27 +120,21 @@ impl Session {
         Ok(())
     }
 
-    /// Answer a peer's request, or refuse it with `None`.
-    pub fn respond(&self, request: &[u8]) -> Option<Bytes> {
-        let request = match wire::decode(request) {
-            Ok(request) => request,
-            Err(err) => {
-                log::warn!("refusing malformed request: {err:#}");
-                return None;
-            }
+    /// Answer a peer's request.
+    pub fn respond(&self, request: &[u8]) -> Result<Bytes> {
+        let Message::SnapshotRequest { id } = wire::decode(request)? else {
+            bail!("unexpected request");
         };
-        let Message::SnapshotRequest { id } = request else {
-            log::warn!("refusing unexpected request {request:?}");
-            return None;
-        };
-
         // Only the owner answers.
-        if !self.owns(id) {
-            return None;
-        }
+        ensure!(self.owns(id), "{} is not ours", id.fmt_short());
+        let replica = self
+            .replicas
+            .get(&id)
+            .with_context(|| format!("{} is not open", id.fmt_short()))?;
+
         log::debug!("sending snapshot of {}", id.fmt_short());
-        let replica = self.replicas.get(&id)?.encode();
-        Some(wire::encode(&Message::Snapshot { replica }))
+        let replica = replica.encode();
+        Ok(wire::encode(&Message::Snapshot { replica }))
     }
 
     /// Receive the answer to one of our requests, along with the request.
@@ -153,11 +145,19 @@ impl Session {
         };
         let replica = response.and_then(|response| match wire::decode(&response)? {
             Message::Snapshot { replica } => Ok(replica),
-            response => anyhow::bail!("unexpected response {response:?}"),
+            response => bail!("unexpected response {response:?}"),
         });
         match replica {
             Ok(replica) => self.remote_change(id, &replica),
-            Err(err) => self.stop_syncing(id, format!("failed to get snapshot: {err:#}")),
+            Err(err) => {
+                if self.unsync(id) {
+                    self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
+                    self.events.push_back(Event::Unshared {
+                        id,
+                        reason: format!("failed to get snapshot: {err:#}"),
+                    });
+                }
+            }
         }
     }
 
@@ -222,7 +222,13 @@ impl Session {
             }
             (Channel::Session, Message::Unshare { id }) => {
                 self.documents.remove(&id);
-                self.stop_syncing(id, "owner unshared".to_string());
+                if self.unsync(id) {
+                    self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
+                    self.events.push_back(Event::Unshared {
+                        id,
+                        reason: "owner unshared".to_string(),
+                    });
+                }
             }
             (Channel::Document(topic), Message::Edit { update }) => {
                 self.remote_change(SharedId::from(topic), &update)
@@ -244,14 +250,6 @@ impl Session {
         };
         if !changes.is_empty() {
             self.events.push_back(Event::Changes { id, changes });
-        }
-    }
-
-    /// Stops syncing a document we opened, and tells the driver why.
-    fn stop_syncing(&mut self, id: SharedId, reason: String) {
-        if self.unsync(id) {
-            self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
-            self.events.push_back(Event::Unshared { id, reason });
         }
     }
 

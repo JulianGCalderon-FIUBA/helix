@@ -27,8 +27,6 @@ use tokio_stream::{wrappers::UnboundedReceiverStream, StreamMap};
 
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
-/// Requests go to a single peer over this protocol, unlike gossip, which
-/// reaches everyone in a topic.
 const REQUEST_ALPN: &[u8] = b"helix/request/0";
 
 /// A gossip swarm we can be in.
@@ -41,13 +39,13 @@ pub enum Channel {
 /// What the service tells the editor.
 #[derive(Debug)]
 pub enum Event {
+    /// A message broadcast to a channel.
     Received(Channel, Bytes),
-    Exit(Channel, String),
-    /// A peer sent us a request. Reply `None` to refuse it.
-    Request(Bytes, oneshot::Sender<Option<Bytes>>),
-    /// The answer to a request we sent, which comes back along with it,
-    /// so that the editor knows what it is an answer to.
+    /// A peer's request, to answer through the sender.
+    Request(Bytes, oneshot::Sender<Result<Bytes>>),
+    /// The response to our request, along with the request.
     Response(Bytes, Result<Bytes>),
+    Exit(Channel, String),
 }
 
 /// What the editor asks to the service.
@@ -242,8 +240,6 @@ impl Actor {
         }
     }
 
-    /// The request runs in its own task, so that a slow peer doesn't
-    /// stall the actor.
     fn request(&self, peer: EndpointId, message: Bytes) {
         log::trace!(
             "sending {} bytes request to {}",
@@ -253,7 +249,17 @@ impl Actor {
         let endpoint = self.endpoint.clone();
         let events = self.events.clone();
         tokio::spawn(async move {
-            let response = request(&endpoint, peer, &message).await;
+            let response = async {
+                let connection = endpoint.connect(peer, REQUEST_ALPN).await?;
+                let (mut send, mut recv) = connection.open_bi().await?;
+                send.write_all(&message).await?;
+                send.finish()?;
+                let response = recv.read_to_end(MAX_MESSAGE_SIZE).await?;
+                // We close once we have read everything, since the peer waits for it.
+                connection.close(0u32.into(), b"done");
+                anyhow::Ok(Bytes::from(response))
+            }
+            .await;
             let _ = events.send(Event::Response(message, response));
         });
     }
@@ -381,19 +387,7 @@ impl Actor {
     }
 }
 
-async fn request(endpoint: &Endpoint, peer: EndpointId, message: &[u8]) -> Result<Bytes> {
-    let connection = endpoint.connect(peer, REQUEST_ALPN).await?;
-    let (mut send, mut recv) = connection.open_bi().await?;
-    send.write_all(message).await?;
-    send.finish()?;
-    let response = recv.read_to_end(MAX_MESSAGE_SIZE).await?;
-    // We close once we have read everything, since the peer waits for it.
-    connection.close(0u32.into(), b"done");
-    Ok(response.into())
-}
-
-/// Answers requests. Only the editor knows what they mean, so each one
-/// goes to the editor, and we wait for its reply.
+/// Protocol for request/response communication between peers.
 #[derive(Debug, Clone)]
 struct RequestProtocol {
     events: UnboundedSender<Event>,
@@ -409,16 +403,24 @@ impl ProtocolHandler for RequestProtocol {
 
         let (reply, response) = oneshot::channel();
         let _ = self.events.send(Event::Request(request.into(), reply));
-        let Ok(Some(response)) = response.await else {
-            connection.close(1u32.into(), b"refused");
-            return Ok(());
+        let response = match response.await.map_err(AcceptError::from_err)? {
+            Ok(response) => response,
+            Err(err) => {
+                log::warn!("refusing request: {err:#}");
+                // The requester gets the error as the reason for closing.
+                connection.close(1u32.into(), format!("{err:#}").as_bytes());
+                return Ok(());
+            }
         };
 
         send.write_all(&response)
             .await
             .map_err(AcceptError::from_err)?;
         send.finish()?;
-        // Closing now could drop the response before it is delivered.
+        // finish() doesn't wait for the response to arrive, and returning
+        // drops the connection, which closes it. Closing makes the
+        // requester discard data it hasn't read yet, so we wait for it to
+        // close the connection once it has read the whole response.
         connection.closed().await;
         Ok(())
     }
