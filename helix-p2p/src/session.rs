@@ -109,7 +109,6 @@ impl Session {
         let owner = meta.owner;
 
         // Subscribe first, so that no edit after the snapshot is missed.
-        // Loro holds edits that arrive before the snapshot until it does.
         self.replicas.insert(id, Replica::empty());
         self.transmits
             .push_back(Transmit::Subscribe(id.topic(), vec![owner]));

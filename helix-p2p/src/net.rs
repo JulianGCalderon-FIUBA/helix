@@ -407,7 +407,6 @@ impl ProtocolHandler for RequestProtocol {
             Ok(response) => response,
             Err(err) => {
                 log::warn!("refusing request: {err:#}");
-                // The requester gets the error as the reason for closing.
                 connection.close(1u32.into(), format!("{err:#}").as_bytes());
                 return Ok(());
             }
@@ -417,10 +416,6 @@ impl ProtocolHandler for RequestProtocol {
             .await
             .map_err(AcceptError::from_err)?;
         send.finish()?;
-        // finish() doesn't wait for the response to arrive, and returning
-        // drops the connection, which closes it. Closing makes the
-        // requester discard data it hasn't read yet, so we wait for it to
-        // close the connection once it has read the whole response.
         connection.closed().await;
         Ok(())
     }
