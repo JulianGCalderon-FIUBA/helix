@@ -59,7 +59,7 @@ pub struct Session {
     documents: HashMap<SharedId, SharedMeta>,
     replicas: HashMap<SharedId, Replica>,
     /// The documents whose snapshots we requested, by request id.
-    requests: HashMap<u64, SharedId>,
+    pending: HashMap<u64, SharedId>,
     events: VecDeque<Event>,
     transmits: VecDeque<Transmit>,
 }
@@ -72,7 +72,7 @@ impl Session {
             rng: StdRng::seed_from_u64(seed),
             documents: HashMap::new(),
             replicas: HashMap::new(),
-            requests: HashMap::new(),
+            pending: HashMap::new(),
             events: VecDeque::new(),
             transmits: VecDeque::new(),
         }
@@ -116,7 +116,7 @@ impl Session {
         self.transmits
             .push_back(Transmit::Subscribe(id.topic(), vec![owner]));
         let request = self.rng.random();
-        self.requests.insert(request, id);
+        self.pending.insert(request, id);
         self.transmits.push_back(Transmit::Request(
             request,
             owner,
@@ -142,7 +142,7 @@ impl Session {
 
     /// Receive the answer to one of our requests.
     pub fn receive_response(&mut self, request: u64, response: Result<Bytes>) {
-        let Some(id) = self.requests.remove(&request) else {
+        let Some(id) = self.pending.remove(&request) else {
             return;
         };
         let replica = response.and_then(|response| {

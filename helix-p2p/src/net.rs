@@ -50,26 +50,26 @@ pub enum Event {
 
 /// What the editor asks to the service.
 #[derive(Debug)]
-enum Request {
+enum Command {
     Ticket(oneshot::Sender<String>),
     Join(String, oneshot::Sender<Result<()>>),
     Subscribe(TopicId, Vec<EndpointId>),
     Unsubscribe(TopicId),
     Broadcast(Channel, Bytes),
-    Send(u64, EndpointId, Bytes),
+    Request(u64, EndpointId, Bytes),
     Shutdown,
 }
 
 #[derive(Clone)]
 pub struct Service {
     id: EndpointId,
-    requests: UnboundedSender<Request>,
+    commands: UnboundedSender<Command>,
 }
 
 impl Service {
     pub fn new() -> (Self, UnboundedReceiverStream<Event>) {
         let (events_tx, events_rx) = unbounded_channel();
-        let (requests_tx, requests_rx) = unbounded_channel();
+        let (commands_tx, commands_rx) = unbounded_channel();
 
         let secret_key = SecretKey::generate();
         let id = secret_key.public();
@@ -77,13 +77,13 @@ impl Service {
         tokio::spawn(async move {
             Actor::bind(secret_key, events_tx)
                 .await
-                .run(requests_rx)
+                .run(commands_rx)
                 .await;
         });
 
         let service = Service {
             id,
-            requests: requests_tx,
+            commands: commands_tx,
         };
         (service, UnboundedReceiverStream::new(events_rx))
     }
@@ -94,40 +94,40 @@ impl Service {
 
     pub fn ticket(&self) -> impl Future<Output = String> + 'static {
         let (tx, rx) = oneshot::channel();
-        self.send(Request::Ticket(tx));
+        self.send(Command::Ticket(tx));
         async move { rx.await.expect("actor should reply") }
     }
 
     pub fn join(&self, ticket: String) -> impl Future<Output = Result<()>> + 'static {
         let (tx, rx) = oneshot::channel();
-        self.send(Request::Join(ticket, tx));
+        self.send(Command::Join(ticket, tx));
         async move { rx.await.expect("actor should reply") }
     }
 
     pub fn shutdown(&self) {
-        self.send(Request::Shutdown);
+        self.send(Command::Shutdown);
     }
 
     pub fn subscribe(&self, topic: TopicId, bootstrap: Vec<EndpointId>) {
-        self.send(Request::Subscribe(topic, bootstrap));
+        self.send(Command::Subscribe(topic, bootstrap));
     }
 
     pub fn unsubscribe(&self, topic: TopicId) {
-        self.send(Request::Unsubscribe(topic));
+        self.send(Command::Unsubscribe(topic));
     }
 
     pub fn broadcast(&self, channel: Channel, message: Bytes) {
-        self.send(Request::Broadcast(channel, message));
+        self.send(Command::Broadcast(channel, message));
     }
 
     /// The response comes back with the same id.
     pub fn request(&self, id: u64, peer: EndpointId, message: Bytes) {
-        self.send(Request::Send(id, peer, message));
+        self.send(Command::Request(id, peer, message));
     }
 
-    fn send(&self, request: Request) {
-        self.requests
-            .send(request)
+    fn send(&self, command: Command) {
+        self.commands
+            .send(command)
             .expect("internal actor should be running");
     }
 }
@@ -205,43 +205,43 @@ impl Actor {
         }
     }
 
-    async fn run(mut self, mut requests: UnboundedReceiver<Request>) {
+    async fn run(mut self, mut commands: UnboundedReceiver<Command>) {
         loop {
             tokio::select! {
-                request = requests.recv() => {
+                command = commands.recv() => {
                     // If every service handle is gone, we exit.
-                    let Some(request) = request else {
+                    let Some(command) = command else {
                         break;
                     };
-                    self.handle(request).await;
+                    self.handle(command).await;
                 }
                 Some((channel, event)) = self.receivers.next() => self.on_event(channel, event),
             }
         }
     }
 
-    async fn handle(&mut self, request: Request) {
-        match request {
-            Request::Ticket(chan) => {
+    async fn handle(&mut self, command: Command) {
+        match command {
+            Command::Ticket(chan) => {
                 let _ = chan.send(self.ticket().await);
             }
-            Request::Join(ticket, chan) => {
+            Command::Join(ticket, chan) => {
                 let result = self.join(&ticket).await;
                 let _ = chan.send(result);
             }
-            Request::Subscribe(id, bootstrap) => self.subscribe_document(id, bootstrap).await,
-            Request::Unsubscribe(id) => self.unsubscribe(Channel::Document(id)),
-            Request::Broadcast(channel, message) => {
+            Command::Subscribe(id, bootstrap) => self.subscribe_document(id, bootstrap).await,
+            Command::Unsubscribe(id) => self.unsubscribe(Channel::Document(id)),
+            Command::Broadcast(channel, message) => {
                 if let Err(err) = self.broadcast(channel, message).await {
                     log::warn!("failed to broadcast: {err:#}")
                 }
             }
-            Request::Send(id, peer, message) => self.request(id, peer, message),
-            Request::Shutdown => self.shutdown(),
+            Command::Request(id, peer, message) => self.spawn_request(id, peer, message),
+            Command::Shutdown => self.shutdown(),
         }
     }
 
-    fn request(&self, id: u64, peer: EndpointId, message: Bytes) {
+    fn spawn_request(&self, id: u64, peer: EndpointId, message: Bytes) {
         log::trace!(
             "sending {} bytes request to {}",
             message.len(),
@@ -250,7 +250,7 @@ impl Actor {
         let endpoint = self.endpoint.clone();
         let events = self.events.clone();
         tokio::spawn(async move {
-            let response = request(&endpoint, peer, &message).await;
+            let response = send_request(&endpoint, peer, &message).await;
             let _ = events.send(Event::Response(id, response));
         });
     }
@@ -378,7 +378,7 @@ impl Actor {
     }
 }
 
-async fn request(endpoint: &Endpoint, peer: EndpointId, message: &[u8]) -> Result<Bytes> {
+async fn send_request(endpoint: &Endpoint, peer: EndpointId, message: &[u8]) -> Result<Bytes> {
     let connection = endpoint.connect(peer, REQUEST_ALPN).await?;
     let (mut send, mut recv) = connection.open_bi().await?;
     send.write_all(message).await?;
