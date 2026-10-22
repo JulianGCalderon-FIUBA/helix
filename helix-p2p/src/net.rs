@@ -43,8 +43,8 @@ pub enum Event {
     Received(Channel, Bytes),
     /// A peer's request, to answer through the sender.
     Request(Bytes, oneshot::Sender<Result<Bytes>>),
-    /// The response to our request, along with the request.
-    Response(Bytes, Result<Bytes>),
+    /// The response to our request with the given id.
+    Response(u64, Result<Bytes>),
     Exit(Channel, String),
 }
 
@@ -56,7 +56,7 @@ enum Request {
     Subscribe(TopicId, Vec<EndpointId>),
     Unsubscribe(TopicId),
     Broadcast(Channel, Bytes),
-    Send(EndpointId, Bytes),
+    Send(u64, EndpointId, Bytes),
     Shutdown,
 }
 
@@ -120,8 +120,9 @@ impl Service {
         self.send(Request::Broadcast(channel, message));
     }
 
-    pub fn request(&self, peer: EndpointId, message: Bytes) {
-        self.send(Request::Send(peer, message));
+    /// The response comes back with the same id.
+    pub fn request(&self, id: u64, peer: EndpointId, message: Bytes) {
+        self.send(Request::Send(id, peer, message));
     }
 
     fn send(&self, request: Request) {
@@ -235,12 +236,12 @@ impl Actor {
                     log::warn!("failed to broadcast: {err:#}")
                 }
             }
-            Request::Send(peer, message) => self.request(peer, message),
+            Request::Send(id, peer, message) => self.request(id, peer, message),
             Request::Shutdown => self.shutdown(),
         }
     }
 
-    fn request(&self, peer: EndpointId, message: Bytes) {
+    fn request(&self, id: u64, peer: EndpointId, message: Bytes) {
         log::trace!(
             "sending {} bytes request to {}",
             message.len(),
@@ -250,7 +251,7 @@ impl Actor {
         let events = self.events.clone();
         tokio::spawn(async move {
             let response = request(&endpoint, peer, &message).await;
-            let _ = events.send(Event::Response(message, response));
+            let _ = events.send(Event::Response(id, response));
         });
     }
 

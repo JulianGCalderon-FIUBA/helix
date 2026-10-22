@@ -63,7 +63,7 @@ impl P2p {
             Transmit::Subscribe(topic, bootstrap) => self.service.subscribe(topic, bootstrap),
             Transmit::Unsubscribe(topic) => self.service.unsubscribe(topic),
             Transmit::Broadcast(channel, message) => self.service.broadcast(channel, message),
-            Transmit::Request(peer, message) => self.service.request(peer, message),
+            Transmit::Request(id, peer, message) => self.service.request(id, peer, message),
             Transmit::Shutdown => self.service.shutdown(),
         }
     }
@@ -126,8 +126,8 @@ impl Editor {
             net::Event::Request(request, reply) => {
                 let _ = reply.send(self.p2p.session().respond(&request));
             }
-            net::Event::Response(request, response) => {
-                self.with_session(|session| session.receive_response(&request, response))
+            net::Event::Response(id, response) => {
+                self.with_session(|session| session.receive_response(id, response))
             }
         }
     }
