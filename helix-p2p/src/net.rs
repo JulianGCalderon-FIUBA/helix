@@ -247,6 +247,10 @@ impl Actor {
             }
             Request::Join(ticket, chan) => {
                 let result = self.join(&ticket).await;
+                // The status line shows the error too, but only briefly.
+                if let Err(err) = &result {
+                    log::warn!("failed to join session: {err:#}");
+                }
                 let _ = chan.send(result);
             }
             Request::Subscribe(id, bootstrap) => self.subscribe_document(id, bootstrap).await,

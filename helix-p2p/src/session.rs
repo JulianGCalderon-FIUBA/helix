@@ -211,7 +211,9 @@ impl Session {
                 }
             }
             (Channel::Session, GossipMessage::Unshare { id }) => {
-                self.documents.remove(&id);
+                if let Some(meta) = self.documents.remove(&id) {
+                    log::info!("{} unshared {}", meta.owner.fmt_short(), id.fmt_short());
+                }
                 if self.unsync(id) {
                     self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
                     self.events.push_back(Event::Unshared {
