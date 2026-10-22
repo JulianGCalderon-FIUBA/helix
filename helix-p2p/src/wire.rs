@@ -4,7 +4,7 @@ use std::{fmt::Display, path::PathBuf};
 
 use anyhow::Result;
 use bytes::Bytes;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::net::{EndpointId, TopicId};
 
@@ -31,7 +31,7 @@ impl From<TopicId> for SharedId {
 /// Messages on a document's topic are about that document.
 ///
 /// Gossip drops a message whose content it has seen recently.
-/// Nonces let requests and snapshots be sent again.
+/// Nonces let requests be sent again.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
     Share {
@@ -45,24 +45,30 @@ pub enum Message {
     DocumentsRequest {
         nonce: u64,
     },
-    SnapshotRequest {
-        nonce: u64,
-    },
-    Snapshot {
-        nonce: u64,
-        replica: Vec<u8>,
-    },
     Edit {
         update: Vec<u8>,
     },
 }
 
-pub fn encode(message: &Message) -> Bytes {
+/// Messages over a direct connection between two peers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PeerMessage {
+    SnapshotRequest {
+        request: u64,
+        id: SharedId,
+    },
+    Snapshot {
+        request: u64,
+        replica: Result<Vec<u8>, String>,
+    },
+}
+
+pub fn encode(message: &impl Serialize) -> Bytes {
     postcard::to_stdvec(message)
         .expect("message should serialize")
         .into()
 }
 
-pub fn decode(body: &[u8]) -> Result<Message> {
+pub fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T> {
     Ok(postcard::from_bytes(body)?)
 }
