@@ -156,12 +156,8 @@ impl Editor {
         Ok(())
     }
 
-    /// Replaces the session with the one we have just joined.
-    pub fn reset_session(&mut self) {
-        // Documents from the old session are no longer synced.
-        self.clear_shared_markers();
-        self.p2p.session = Session::joined(self.p2p.service.id(), rand::random());
-        self.drain_session_queue();
+    pub fn join_session(&mut self) {
+        self.with_session(|session| session.join());
     }
 
     fn apply_session_event(&mut self, event: Event) {
@@ -188,12 +184,6 @@ impl Editor {
                 let name = doc.display_name().into_owned();
                 self.set_status(format!("stopped syncing {name}: {reason}"));
             }
-        }
-    }
-
-    fn clear_shared_markers(&mut self) {
-        for doc in self.documents_mut() {
-            doc.shared = None;
         }
     }
 }

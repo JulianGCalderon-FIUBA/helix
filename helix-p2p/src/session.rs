@@ -62,6 +62,7 @@ pub struct Session {
 }
 
 impl Session {
+    /// A new session with no peers
     pub fn new(me: EndpointId, seed: u64) -> Self {
         Self {
             me,
@@ -73,12 +74,12 @@ impl Session {
         }
     }
 
-    /// A session we have just joined, which asks for its documents.
-    pub fn joined(me: EndpointId, seed: u64) -> Self {
-        let mut session = Self::new(me, seed);
-        let nonce = session.rng.random();
-        session.broadcast(Channel::Session, &Message::DocumentsRequest { nonce });
-        session
+    /// We have just joined a session. Documents we shared before stay
+    /// shared, so we announce them, since nobody there knows about them.
+    pub fn join(&mut self) {
+        let nonce = self.rng.random();
+        self.broadcast(Channel::Session, &Message::DocumentsRequest { nonce });
+        self.announce_owned();
     }
 
     pub fn share(&mut self, path: Option<PathBuf>, text: &Rope) -> SharedId {
@@ -169,17 +170,7 @@ impl Session {
         };
 
         match (channel, message) {
-            (Channel::Session, Message::DocumentsRequest { .. }) => {
-                let owned: Vec<_> = self
-                    .documents
-                    .values()
-                    .filter(|meta| meta.owner == self.me)
-                    .cloned()
-                    .collect();
-                for meta in owned {
-                    self.announce(&meta);
-                }
-            }
+            (Channel::Session, Message::DocumentsRequest { .. }) => self.announce_owned(),
             (Channel::Session, Message::Share { id, owner, path }) => {
                 let meta = SharedMeta { id, owner, path };
                 if self.documents.insert(id, meta).is_none() {
@@ -243,6 +234,18 @@ impl Session {
             self.broadcast(Channel::Session, &Message::Unshare { id });
         }
         self.replicas.remove(&id).is_some()
+    }
+
+    fn announce_owned(&mut self) {
+        let owned: Vec<_> = self
+            .documents
+            .values()
+            .filter(|meta| meta.owner == self.me)
+            .cloned()
+            .collect();
+        for meta in owned {
+            self.announce(&meta);
+        }
     }
 
     fn announce(&mut self, meta: &SharedMeta) {
