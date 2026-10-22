@@ -13,10 +13,6 @@ use super::net::{EndpointId, TopicId};
 pub struct SharedId(TopicId);
 
 impl SharedId {
-    pub fn random() -> Self {
-        Self(TopicId::from_bytes(rand::random()))
-    }
-
     pub fn topic(&self) -> TopicId {
         self.0
     }
@@ -33,6 +29,9 @@ impl From<TopicId> for SharedId {
 }
 
 /// Messages on a document's topic are about that document.
+///
+/// Gossip drops a message whose content it has seen recently.
+/// Nonces let requests and snapshots be sent again.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
     Share {
