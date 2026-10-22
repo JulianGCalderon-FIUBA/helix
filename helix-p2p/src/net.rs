@@ -40,7 +40,6 @@ pub enum Channel {
     Peer(EndpointId),
 }
 
-// Ids are long, so logs print them short.
 impl fmt::Display for Channel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -55,7 +54,6 @@ impl fmt::Display for Channel {
 #[derive(Debug)]
 pub enum Event {
     Received(Channel, Bytes),
-    /// The reason is logged here, so it isn't passed on.
     Exit(Channel),
 }
 
@@ -247,7 +245,6 @@ impl Actor {
             }
             Request::Join(ticket, chan) => {
                 let result = self.join(&ticket).await;
-                // The status line shows the error too, but only briefly.
                 if let Err(err) = &result {
                     log::warn!("failed to join session: {err:#}");
                 }

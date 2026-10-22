@@ -189,11 +189,6 @@ impl Editor {
                 let name = doc.display_name().into_owned();
                 self.set_status(format!("stopped syncing {name}: {reason}"));
             }
-            Event::Closed { id } => {
-                if let Some(doc) = self.documents_mut().find(|doc| doc.shared == Some(id)) {
-                    doc.shared = None;
-                }
-            }
         }
     }
 }

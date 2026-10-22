@@ -40,19 +40,8 @@ impl SharedMeta {
 /// What the session tells the driver.
 #[derive(Debug)]
 pub enum Event {
-    Changes {
-        id: SharedId,
-        changes: Vec<Change>,
-    },
-    Unshared {
-        id: SharedId,
-        reason: String,
-    },
-    /// The document stopped syncing because the session ended. This isn't
-    /// reported, since the user either left or the transport logged why.
-    Closed {
-        id: SharedId,
-    },
+    Changes { id: SharedId, changes: Vec<Change> },
+    Unshared { id: SharedId, reason: String },
 }
 
 /// What the transport must do.
@@ -154,7 +143,7 @@ impl Session {
 
     pub fn transport_exit(&mut self, channel: Channel) {
         match channel {
-            Channel::Session => self.end(),
+            Channel::Session => self.exit(),
             Channel::Document(topic) => {
                 let id = SharedId::from(topic);
                 if self.unsync(id) {
@@ -184,26 +173,29 @@ impl Session {
     }
 
     pub fn shutdown(&mut self) {
-        // Peers would otherwise keep listing our documents.
-        let owned: Vec<_> = self
-            .documents
-            .values()
-            .filter(|meta| meta.owner == self.me)
-            .map(|meta| meta.id)
-            .collect();
-        for id in owned {
-            self.send(Channel::Session, &GossipMessage::Unshare { id });
+        let ids: Vec<_> = self.replicas.keys().copied().collect();
+        for id in ids {
+            // Unsharing our documents, so that peers stop listing them.
+            self.unsync(id);
+            self.events.push_back(Event::Unshared {
+                id,
+                reason: "closed session".to_string(),
+            });
         }
-        self.end();
+        self.documents.clear();
+        self.pending.clear();
         // The transport drops every topic on shutdown, so there is no need
         // to unsubscribe from each document.
         self.transmits.push_back(Transmit::Shutdown);
     }
 
-    /// Forgets everything about the session, and stops syncing every document.
-    fn end(&mut self) {
+    /// The transport lost the session, so there is nobody left to tell.
+    fn exit(&mut self) {
         for (id, _) in self.replicas.drain() {
-            self.events.push_back(Event::Closed { id });
+            self.events.push_back(Event::Unshared {
+                id,
+                reason: "lost session".to_string(),
+            });
         }
         self.documents.clear();
         self.pending.clear();
