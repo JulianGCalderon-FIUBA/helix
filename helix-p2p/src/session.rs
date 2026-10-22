@@ -7,15 +7,16 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use bytes::Bytes;
 use helix_core::{Change, ChangeSet, Rope};
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use serde::Serialize;
 
 use crate::{
     crdt::Replica,
     net::{Channel, EndpointId, TopicId},
-    wire::{self, Message, SharedId},
+    wire::{self, GossipMessage, PeerMessage, SharedId},
 };
 
 /// Metadata about a shared document, opened or not.
@@ -48,7 +49,7 @@ pub enum Event {
 pub enum Transmit {
     Subscribe(TopicId, Vec<EndpointId>),
     Unsubscribe(TopicId),
-    Broadcast(Channel, Bytes),
+    Send(Channel, Bytes),
     Shutdown,
 }
 
@@ -57,6 +58,8 @@ pub struct Session {
     rng: StdRng,
     documents: HashMap<SharedId, SharedMeta>,
     replicas: HashMap<SharedId, Replica>,
+    /// The owner and document of each snapshot we requested.
+    pending: HashMap<u64, (EndpointId, SharedId)>,
     events: VecDeque<Event>,
     transmits: VecDeque<Transmit>,
 }
@@ -69,6 +72,7 @@ impl Session {
             rng: StdRng::seed_from_u64(seed),
             documents: HashMap::new(),
             replicas: HashMap::new(),
+            pending: HashMap::new(),
             events: VecDeque::new(),
             transmits: VecDeque::new(),
         }
@@ -78,7 +82,7 @@ impl Session {
     /// shared, so we announce them, since nobody there knows about them.
     pub fn join(&mut self) {
         let nonce = self.rng.random();
-        self.broadcast(Channel::Session, &Message::DocumentsRequest { nonce });
+        self.send(Channel::Session, &GossipMessage::DocumentsRequest { nonce });
         self.announce_owned();
     }
 
@@ -105,15 +109,18 @@ impl Session {
             .get(&id)
             .with_context(|| format!("{} is no longer shared", id.fmt_short()))?;
         log::info!("opening {}", meta.label());
+        let owner = meta.owner;
 
+        // Subscribe first, so that no edit after the snapshot is missed.
         self.replicas.insert(id, Replica::empty());
         self.transmits
-            .push_back(Transmit::Subscribe(id.topic(), vec![meta.owner]));
+            .push_back(Transmit::Subscribe(id.topic(), vec![owner]));
 
-        let nonce = self.rng.random();
-        self.broadcast(
-            Channel::Document(id.topic()),
-            &Message::SnapshotRequest { nonce },
+        let request = self.rng.random();
+        self.pending.insert(request, (owner, id));
+        self.send(
+            Channel::Peer(owner),
+            &PeerMessage::SnapshotRequest { request, id },
         );
         Ok(())
     }
@@ -123,7 +130,10 @@ impl Session {
             return;
         };
         let update = replica.from_local(changes);
-        self.broadcast(Channel::Document(id.topic()), &Message::Edit { update });
+        self.send(
+            Channel::Document(id.topic()),
+            &GossipMessage::Edit { update },
+        );
     }
 
     pub fn close(&mut self, id: SharedId) {
@@ -136,6 +146,7 @@ impl Session {
             Channel::Session => {
                 self.documents.clear();
                 self.replicas.clear();
+                self.pending.clear();
             }
             Channel::Document(topic) => {
                 let id = SharedId::from(topic);
@@ -144,6 +155,22 @@ impl Session {
                         id,
                         reason: format!("topic lost: {reason}"),
                     });
+                }
+            }
+            Channel::Peer(peer) => {
+                let lost: Vec<_> = self
+                    .pending
+                    .extract_if(|_, (owner, _)| *owner == peer)
+                    .map(|(_, (_, id))| id)
+                    .collect();
+                for id in lost {
+                    if self.unsync(id) {
+                        self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
+                        self.events.push_back(Event::Unshared {
+                            id,
+                            reason: format!("lost connection to owner: {reason}"),
+                        });
+                    }
                 }
             }
         }
@@ -156,12 +183,18 @@ impl Session {
         }
         self.documents.clear();
         self.replicas.clear();
+        self.pending.clear();
         self.transmits.push_back(Transmit::Shutdown);
     }
 
     /// Receive data from the network layer
     pub fn receive(&mut self, channel: Channel, message: &[u8]) {
-        let message = match wire::decode(message) {
+        if let Channel::Peer(peer) = channel {
+            self.receive_from_peer(peer, message);
+            return;
+        }
+
+        let message: GossipMessage = match wire::decode(message) {
             Ok(message) => message,
             Err(err) => {
                 log::warn!("dropping malformed message: {err:#}");
@@ -170,14 +203,14 @@ impl Session {
         };
 
         match (channel, message) {
-            (Channel::Session, Message::DocumentsRequest { .. }) => self.announce_owned(),
-            (Channel::Session, Message::Share { id, owner, path }) => {
+            (Channel::Session, GossipMessage::DocumentsRequest { .. }) => self.announce_owned(),
+            (Channel::Session, GossipMessage::Share { id, owner, path }) => {
                 let meta = SharedMeta { id, owner, path };
                 if self.documents.insert(id, meta).is_none() {
                     log::info!("{} shared {}", owner.fmt_short(), id.fmt_short());
                 }
             }
-            (Channel::Session, Message::Unshare { id }) => {
+            (Channel::Session, GossipMessage::Unshare { id }) => {
                 self.documents.remove(&id);
                 if self.unsync(id) {
                     self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
@@ -187,28 +220,58 @@ impl Session {
                     });
                 }
             }
-            (Channel::Document(topic), Message::SnapshotRequest { .. }) => {
-                let id = SharedId::from(topic);
-                // Only the owner answers.
-                if !self.owns(id) {
-                    return;
-                }
-                let Some(replica) = self.replicas.get(&id) else {
-                    return;
-                };
-                log::debug!("sending snapshot of {}", id.fmt_short());
-                let message = Message::Snapshot {
-                    nonce: self.rng.random(),
-                    replica: replica.encode(),
-                };
-                self.broadcast(channel, &message);
+            (Channel::Document(topic), GossipMessage::Edit { update }) => {
+                self.remote_change(SharedId::from(topic), &update)
             }
-            (
-                Channel::Document(topic),
-                Message::Snapshot { replica, .. } | Message::Edit { update: replica },
-            ) => self.remote_change(SharedId::from(topic), &replica),
             (channel, _) => log::warn!("dropping message sent to the wrong channel {channel:?}"),
         }
+    }
+
+    fn receive_from_peer(&mut self, peer: EndpointId, message: &[u8]) {
+        let message = match wire::decode(message) {
+            Ok(message) => message,
+            Err(err) => {
+                log::warn!("dropping malformed message: {err:#}");
+                return;
+            }
+        };
+
+        match message {
+            PeerMessage::SnapshotRequest { request, id } => {
+                let replica = self.snapshot(id).map_err(|err| format!("{err:#}"));
+                self.send(
+                    Channel::Peer(peer),
+                    &PeerMessage::Snapshot { request, replica },
+                );
+            }
+            PeerMessage::Snapshot { request, replica } => {
+                let Some((_, id)) = self.pending.remove(&request) else {
+                    return;
+                };
+                match replica {
+                    Ok(replica) => self.remote_change(id, &replica),
+                    Err(reason) => {
+                        if self.unsync(id) {
+                            self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
+                            self.events.push_back(Event::Unshared {
+                                id,
+                                reason: format!("failed to get snapshot: {reason}"),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn snapshot(&self, id: SharedId) -> Result<Vec<u8>> {
+        ensure!(self.owns(id), "{} is not ours", id.fmt_short());
+        let replica = self
+            .replicas
+            .get(&id)
+            .with_context(|| format!("{} is not open", id.fmt_short()))?;
+        log::debug!("sending snapshot of {}", id.fmt_short());
+        Ok(replica.encode())
     }
 
     fn remote_change(&mut self, id: SharedId, update: &[u8]) {
@@ -231,7 +294,7 @@ impl Session {
         if self.owns(id) {
             log::info!("unsharing {}", id.fmt_short());
             self.documents.remove(&id);
-            self.broadcast(Channel::Session, &Message::Unshare { id });
+            self.send(Channel::Session, &GossipMessage::Unshare { id });
         }
         self.replicas.remove(&id).is_some()
     }
@@ -249,17 +312,17 @@ impl Session {
     }
 
     fn announce(&mut self, meta: &SharedMeta) {
-        let message = Message::Share {
+        let message = GossipMessage::Share {
             id: meta.id,
             owner: meta.owner,
             path: meta.path.clone(),
         };
-        self.broadcast(Channel::Session, &message);
+        self.send(Channel::Session, &message);
     }
 
-    fn broadcast(&mut self, channel: Channel, message: &Message) {
+    fn send(&mut self, channel: Channel, message: &impl Serialize) {
         self.transmits
-            .push_back(Transmit::Broadcast(channel, wire::encode(message)));
+            .push_back(Transmit::Send(channel, wire::encode(message)));
     }
 
     pub fn poll_event(&mut self) -> Option<Event> {
