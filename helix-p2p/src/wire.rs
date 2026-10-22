@@ -31,7 +31,7 @@ impl From<TopicId> for SharedId {
 /// Messages on a document's topic are about that document.
 ///
 /// Gossip drops a message whose content it has seen recently.
-/// Nonces let requests be sent again.
+/// Nonces let the same message be sent again.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GossipMessage {
     Share {
@@ -47,6 +47,12 @@ pub enum GossipMessage {
     },
     Edit {
         update: Vec<u8>,
+    },
+    /// The whole selection, so only the latest one matters.
+    Selection {
+        nonce: u64,
+        peer: EndpointId,
+        selection: Vec<u8>,
     },
 }
 
