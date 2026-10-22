@@ -33,7 +33,7 @@ impl From<TopicId> for SharedId {
 /// Gossip drops a message whose content it has seen recently.
 /// Nonces let requests be sent again.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Message {
+pub enum GossipMessage {
     Share {
         id: SharedId,
         owner: EndpointId,

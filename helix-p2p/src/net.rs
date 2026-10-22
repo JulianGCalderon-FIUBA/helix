@@ -345,15 +345,19 @@ impl Actor {
         Ok(())
     }
 
-    /// Each message comes in its own stream, so it needs no framing.
     fn add_peer(&mut self, connection: Connection) {
         let peer = connection.remote_id();
         log::info!("connected to peer {}", peer.fmt_short());
+        // Each message comes in its own stream, so it needs no framing.
         let messages = stream::unfold(connection.clone(), |connection| async move {
             Some((receive_from_peer(&connection).await, connection))
         })
         .boxed();
-        // If we both connect at once, we keep the latest connection.
+        // We already have a connection to this peer only if we both sent a
+        // first message at once, so each of us connected to the other.
+        // Replacing it closes it, and the peer may close the other one,
+        // losing both. That can't happen yet: only the opener sends first,
+        // and the owner answers over the opener's connection.
         self.peers.insert(peer, connection);
         self.peer_messages.insert(peer, messages);
     }
