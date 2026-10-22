@@ -119,8 +119,8 @@ impl Editor {
             net::Event::Received(channel, message) => {
                 self.with_session(|session| session.receive(channel, &message))
             }
-            net::Event::Exit(channel, reason) => {
-                self.with_session(|session| session.transport_exit(channel, reason))
+            net::Event::Exit(channel) => {
+                self.with_session(|session| session.transport_exit(channel))
             }
         }
     }
@@ -153,6 +153,10 @@ impl Editor {
         self.with_session(|session| session.open(id))?;
         let doc_id = self.new_file(action);
         doc_mut!(self, &doc_id).shared = Some(id);
+
+        let meta = &self.p2p.documents()[&id];
+        let status = format!("opening {} from {}", meta.label(), meta.owner.fmt_short());
+        self.set_status(status);
         Ok(())
     }
 

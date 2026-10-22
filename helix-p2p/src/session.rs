@@ -141,19 +141,15 @@ impl Session {
         self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
     }
 
-    pub fn transport_exit(&mut self, channel: Channel, reason: String) {
+    pub fn transport_exit(&mut self, channel: Channel) {
         match channel {
-            Channel::Session => {
-                self.documents.clear();
-                self.replicas.clear();
-                self.pending.clear();
-            }
+            Channel::Session => self.exit(),
             Channel::Document(topic) => {
                 let id = SharedId::from(topic);
                 if self.unsync(id) {
                     self.events.push_back(Event::Unshared {
                         id,
-                        reason: format!("topic lost: {reason}"),
+                        reason: "lost connection".to_string(),
                     });
                 }
             }
@@ -168,7 +164,7 @@ impl Session {
                         self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
                         self.events.push_back(Event::Unshared {
                             id,
-                            reason: format!("lost connection to owner: {reason}"),
+                            reason: "lost connection to owner".to_string(),
                         });
                     }
                 }
@@ -179,12 +175,26 @@ impl Session {
     pub fn shutdown(&mut self) {
         let ids: Vec<_> = self.replicas.keys().copied().collect();
         for id in ids {
-            self.close(id);
+            self.unsync(id);
+            self.events.push_back(Event::Unshared {
+                id,
+                reason: "closed session".to_string(),
+            });
         }
         self.documents.clear();
-        self.replicas.clear();
         self.pending.clear();
         self.transmits.push_back(Transmit::Shutdown);
+    }
+
+    fn exit(&mut self) {
+        for (id, _) in self.replicas.drain() {
+            self.events.push_back(Event::Unshared {
+                id,
+                reason: "lost session".to_string(),
+            });
+        }
+        self.documents.clear();
+        self.pending.clear();
     }
 
     /// Receive data from the network layer
@@ -211,7 +221,9 @@ impl Session {
                 }
             }
             (Channel::Session, GossipMessage::Unshare { id }) => {
-                self.documents.remove(&id);
+                if let Some(meta) = self.documents.remove(&id) {
+                    log::info!("{} unshared {}", meta.owner.fmt_short(), id.fmt_short());
+                }
                 if self.unsync(id) {
                     self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
                     self.events.push_back(Event::Unshared {
@@ -223,7 +235,7 @@ impl Session {
             (Channel::Document(topic), GossipMessage::Edit { update }) => {
                 self.remote_change(SharedId::from(topic), &update)
             }
-            (channel, _) => log::warn!("dropping message sent to the wrong channel {channel:?}"),
+            (channel, _) => log::warn!("dropping message sent to the wrong channel: {channel}"),
         }
     }
 
@@ -251,11 +263,16 @@ impl Session {
                 match replica {
                     Ok(replica) => self.remote_change(id, &replica),
                     Err(reason) => {
+                        log::warn!(
+                            "{} refused snapshot of {}: {reason}",
+                            peer.fmt_short(),
+                            id.fmt_short()
+                        );
                         if self.unsync(id) {
                             self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
                             self.events.push_back(Event::Unshared {
                                 id,
-                                reason: format!("failed to get snapshot: {reason}"),
+                                reason: "owner refused snapshot".to_string(),
                             });
                         }
                     }

@@ -1,6 +1,6 @@
 //! The transport layer moves opaque bytes between peers.
 
-use std::{collections::HashMap, future::Future};
+use std::{collections::HashMap, fmt, future::Future};
 
 use anyhow::{ensure, Result};
 use bytes::Bytes;
@@ -40,11 +40,21 @@ pub enum Channel {
     Peer(EndpointId),
 }
 
+impl fmt::Display for Channel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Channel::Session => write!(f, "session"),
+            Channel::Document(topic) => write!(f, "document {}", topic.fmt_short()),
+            Channel::Peer(peer) => write!(f, "peer {}", peer.fmt_short()),
+        }
+    }
+}
+
 /// What the service tells the editor.
 #[derive(Debug)]
 pub enum Event {
     Received(Channel, Bytes),
-    Exit(Channel, String),
+    Exit(Channel),
 }
 
 /// What the editor asks to the service.
@@ -235,6 +245,9 @@ impl Actor {
             }
             Request::Join(ticket, chan) => {
                 let result = self.join(&ticket).await;
+                if let Err(err) = &result {
+                    log::warn!("failed to join session: {err:#}");
+                }
                 let _ = chan.send(result);
             }
             Request::Subscribe(id, bootstrap) => self.subscribe_document(id, bootstrap).await,
@@ -303,7 +316,7 @@ impl Actor {
     }
 
     async fn subscribe_document(&mut self, id: TopicId, bootstrap: Vec<EndpointId>) {
-        log::info!("subscribing to document {}", id.fmt_short());
+        log::debug!("subscribing to document {}", id.fmt_short());
         let subscription = if bootstrap.is_empty() {
             self.gossip.subscribe(id, bootstrap).await
         } else {
@@ -324,7 +337,7 @@ impl Actor {
     fn unsubscribe(&mut self, channel: Channel) {
         self.senders.remove(&channel);
         self.receivers.remove(&channel);
-        log::info!("unsubscribed from channel {channel:?}");
+        log::info!("unsubscribed from {channel}");
     }
 
     async fn send_to_peer(&mut self, peer: EndpointId, message: Bytes) -> Result<()> {
@@ -368,7 +381,7 @@ impl Actor {
             return Ok(());
         };
 
-        log::trace!("broadcasting {} bytes to {channel:?}", message.len());
+        log::trace!("broadcasting {} bytes to {channel}", message.len());
         sender.broadcast(message).await?;
         Ok(())
     }
@@ -385,14 +398,14 @@ impl Actor {
     fn on_event(&mut self, channel: Channel, event: Option<Result<GossipEvent, ApiError>>) {
         match event {
             Some(Ok(GossipEvent::NeighborUp(id))) => {
-                log::info!("connected to {} in {channel:?}", id.fmt_short());
+                log::debug!("connected to {} in {channel}", id.fmt_short());
             }
             Some(Ok(GossipEvent::NeighborDown(id))) => {
-                log::info!("disconnected from {} in {channel:?}", id.fmt_short());
+                log::debug!("disconnected from {} in {channel}", id.fmt_short());
             }
             Some(Ok(GossipEvent::Received(message))) => {
                 log::trace!(
-                    "received {} bytes from {} in {channel:?}",
+                    "received {} bytes from {} in {channel}",
                     message.content.len(),
                     message.delivered_from.fmt_short()
                 );
@@ -417,12 +430,13 @@ impl Actor {
     }
 
     fn exit(&mut self, channel: Channel, reason: String) {
+        log::error!("lost {channel}: {reason}");
         match channel {
             Channel::Session => self.shutdown(),
             Channel::Document(_) => self.unsubscribe(channel),
             Channel::Peer(peer) => self.disconnect(peer),
         }
-        let _ = self.events.send(Event::Exit(channel, reason));
+        let _ = self.events.send(Event::Exit(channel));
     }
 }
 
