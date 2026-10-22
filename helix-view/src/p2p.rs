@@ -63,7 +63,7 @@ impl P2p {
             Transmit::Subscribe(topic, bootstrap) => self.service.subscribe(topic, bootstrap),
             Transmit::Unsubscribe(topic) => self.service.unsubscribe(topic),
             Transmit::Broadcast(channel, message) => self.service.broadcast(channel, message),
-            Transmit::RequestSnapshot(topic, owner) => self.service.request_snapshot(topic, owner),
+            Transmit::Request(peer, message) => self.service.request(peer, message),
             Transmit::Shutdown => self.service.shutdown(),
         }
     }
@@ -123,12 +123,12 @@ impl Editor {
             net::Event::Exit(channel, reason) => {
                 self.with_session(|session| session.transport_exit(channel, reason))
             }
-            net::Event::SnapshotRequest(topic, reply) => {
-                let snapshot = self.p2p.session().snapshot(SharedId::from(topic));
-                let _ = reply.send(snapshot);
+            net::Event::Request(request, reply) => {
+                let _ = reply.send(self.p2p.session().respond(&request));
             }
-            net::Event::Snapshot(topic, snapshot) => self
-                .with_session(|session| session.receive_snapshot(SharedId::from(topic), snapshot)),
+            net::Event::Response(request, response) => {
+                self.with_session(|session| session.receive_response(&request, response))
+            }
         }
     }
 

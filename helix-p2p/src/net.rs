@@ -27,9 +27,9 @@ use tokio_stream::{wrappers::UnboundedReceiverStream, StreamMap};
 
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
-/// Peers ask an owner for a document's snapshot over this protocol, so
-/// that only the peer opening the document receives its full contents.
-const SNAPSHOT_ALPN: &[u8] = b"helix/snapshot/0";
+/// Requests go to a single peer over this protocol, unlike gossip, which
+/// reaches everyone in a topic.
+const REQUEST_ALPN: &[u8] = b"helix/request/0";
 
 /// A gossip swarm we can be in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -43,10 +43,11 @@ pub enum Channel {
 pub enum Event {
     Received(Channel, Bytes),
     Exit(Channel, String),
-    /// A peer asks for a document's snapshot. Reply `None` if we don't own it.
-    SnapshotRequest(TopicId, oneshot::Sender<Option<Vec<u8>>>),
-    /// The owner's answer to our snapshot request.
-    Snapshot(TopicId, Result<Vec<u8>>),
+    /// A peer sent us a request. Reply `None` to refuse it.
+    Request(Bytes, oneshot::Sender<Option<Bytes>>),
+    /// The answer to a request we sent, which comes back along with it,
+    /// so that the editor knows what it is an answer to.
+    Response(Bytes, Result<Bytes>),
 }
 
 /// What the editor asks to the service.
@@ -57,7 +58,7 @@ enum Request {
     Subscribe(TopicId, Vec<EndpointId>),
     Unsubscribe(TopicId),
     Broadcast(Channel, Bytes),
-    Snapshot(TopicId, EndpointId),
+    Send(EndpointId, Bytes),
     Shutdown,
 }
 
@@ -121,8 +122,8 @@ impl Service {
         self.send(Request::Broadcast(channel, message));
     }
 
-    pub fn request_snapshot(&self, topic: TopicId, owner: EndpointId) {
-        self.send(Request::Snapshot(topic, owner));
+    pub fn request(&self, peer: EndpointId, message: Bytes) {
+        self.send(Request::Send(peer, message));
     }
 
     fn send(&self, request: Request) {
@@ -179,12 +180,12 @@ impl Actor {
         let gossip = Gossip::builder()
             .max_message_size(MAX_MESSAGE_SIZE)
             .spawn(endpoint.clone());
-        let snapshots = SnapshotProtocol {
+        let requests = RequestProtocol {
             events: events.clone(),
         };
         let router = Router::builder(endpoint.clone())
             .accept(ALPN, gossip.clone())
-            .accept(SNAPSHOT_ALPN, snapshots)
+            .accept(REQUEST_ALPN, requests)
             .spawn();
 
         let addresses = MemoryLookup::new();
@@ -236,24 +237,24 @@ impl Actor {
                     log::warn!("failed to broadcast: {err:#}")
                 }
             }
-            Request::Snapshot(topic, owner) => self.request_snapshot(topic, owner),
+            Request::Send(peer, message) => self.request(peer, message),
             Request::Shutdown => self.shutdown(),
         }
     }
 
-    /// The request runs in its own task, so that a slow owner doesn't
+    /// The request runs in its own task, so that a slow peer doesn't
     /// stall the actor.
-    fn request_snapshot(&self, topic: TopicId, owner: EndpointId) {
-        log::debug!(
-            "requesting snapshot of {} from {}",
-            topic.fmt_short(),
-            owner.fmt_short()
+    fn request(&self, peer: EndpointId, message: Bytes) {
+        log::trace!(
+            "sending {} bytes request to {}",
+            message.len(),
+            peer.fmt_short()
         );
         let endpoint = self.endpoint.clone();
         let events = self.events.clone();
         tokio::spawn(async move {
-            let result = fetch_snapshot(&endpoint, topic, owner).await;
-            let _ = events.send(Event::Snapshot(topic, result));
+            let response = request(&endpoint, peer, &message).await;
+            let _ = events.send(Event::Response(message, response));
         });
     }
 
@@ -380,46 +381,44 @@ impl Actor {
     }
 }
 
-async fn fetch_snapshot(endpoint: &Endpoint, topic: TopicId, owner: EndpointId) -> Result<Vec<u8>> {
-    let connection = endpoint.connect(owner, SNAPSHOT_ALPN).await?;
+async fn request(endpoint: &Endpoint, peer: EndpointId, message: &[u8]) -> Result<Bytes> {
+    let connection = endpoint.connect(peer, REQUEST_ALPN).await?;
     let (mut send, mut recv) = connection.open_bi().await?;
-    send.write_all(topic.as_bytes()).await?;
+    send.write_all(message).await?;
     send.finish()?;
-    let snapshot = recv.read_to_end(MAX_MESSAGE_SIZE).await?;
-    // We close once we have read everything, since the owner waits for it.
+    let response = recv.read_to_end(MAX_MESSAGE_SIZE).await?;
+    // We close once we have read everything, since the peer waits for it.
     connection.close(0u32.into(), b"done");
-    Ok(snapshot)
+    Ok(response.into())
 }
 
-/// Answers snapshot requests. The replicas live in the editor's session,
-/// so each request goes to the editor, and we wait for its reply.
+/// Answers requests. Only the editor knows what they mean, so each one
+/// goes to the editor, and we wait for its reply.
 #[derive(Debug, Clone)]
-struct SnapshotProtocol {
+struct RequestProtocol {
     events: UnboundedSender<Event>,
 }
 
-impl ProtocolHandler for SnapshotProtocol {
+impl ProtocolHandler for RequestProtocol {
     async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
         let (mut send, mut recv) = connection.accept_bi().await?;
-        let request = recv.read_to_end(32).await.map_err(AcceptError::from_err)?;
-        let Ok(topic) = <[u8; 32]>::try_from(request) else {
-            connection.close(1u32.into(), b"malformed request");
-            return Ok(());
-        };
-        let topic = TopicId::from_bytes(topic);
+        let request = recv
+            .read_to_end(MAX_MESSAGE_SIZE)
+            .await
+            .map_err(AcceptError::from_err)?;
 
-        let (reply, snapshot) = oneshot::channel();
-        let _ = self.events.send(Event::SnapshotRequest(topic, reply));
-        let Ok(Some(snapshot)) = snapshot.await else {
-            connection.close(1u32.into(), b"not shared");
+        let (reply, response) = oneshot::channel();
+        let _ = self.events.send(Event::Request(request.into(), reply));
+        let Ok(Some(response)) = response.await else {
+            connection.close(1u32.into(), b"refused");
             return Ok(());
         };
 
-        send.write_all(&snapshot)
+        send.write_all(&response)
             .await
             .map_err(AcceptError::from_err)?;
         send.finish()?;
-        // Closing now could drop the snapshot before it is delivered.
+        // Closing now could drop the response before it is delivered.
         connection.closed().await;
         Ok(())
     }

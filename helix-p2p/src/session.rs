@@ -49,7 +49,7 @@ pub enum Transmit {
     Subscribe(TopicId, Vec<EndpointId>),
     Unsubscribe(TopicId),
     Broadcast(Channel, Bytes),
-    RequestSnapshot(TopicId, EndpointId),
+    Request(EndpointId, Bytes),
     Shutdown,
 }
 
@@ -115,24 +115,48 @@ impl Session {
         self.replicas.insert(id, Replica::empty());
         self.transmits
             .push_back(Transmit::Subscribe(id.topic(), vec![owner]));
-        self.transmits
-            .push_back(Transmit::RequestSnapshot(id.topic(), owner));
+        self.transmits.push_back(Transmit::Request(
+            owner,
+            wire::encode(&Message::SnapshotRequest { id }),
+        ));
         Ok(())
     }
 
-    /// A peer asks for a document's snapshot. Only the owner answers.
-    pub fn snapshot(&self, id: SharedId) -> Option<Vec<u8>> {
+    /// Answer a peer's request, or refuse it with `None`.
+    pub fn respond(&self, request: &[u8]) -> Option<Bytes> {
+        let request = match wire::decode(request) {
+            Ok(request) => request,
+            Err(err) => {
+                log::warn!("refusing malformed request: {err:#}");
+                return None;
+            }
+        };
+        let Message::SnapshotRequest { id } = request else {
+            log::warn!("refusing unexpected request {request:?}");
+            return None;
+        };
+
+        // Only the owner answers.
         if !self.owns(id) {
             return None;
         }
         log::debug!("sending snapshot of {}", id.fmt_short());
-        self.replicas.get(&id).map(Replica::encode)
+        let replica = self.replicas.get(&id)?.encode();
+        Some(wire::encode(&Message::Snapshot { replica }))
     }
 
-    /// The owner answered our snapshot request.
-    pub fn receive_snapshot(&mut self, id: SharedId, snapshot: Result<Vec<u8>>) {
-        match snapshot {
-            Ok(snapshot) => self.remote_change(id, &snapshot),
+    /// Receive the answer to one of our requests, along with the request.
+    pub fn receive_response(&mut self, request: &[u8], response: Result<Bytes>) {
+        // We only send snapshot requests, which we encoded ourselves.
+        let Ok(Message::SnapshotRequest { id }) = wire::decode(request) else {
+            return;
+        };
+        let replica = response.and_then(|response| match wire::decode(&response)? {
+            Message::Snapshot { replica } => Ok(replica),
+            response => anyhow::bail!("unexpected response {response:?}"),
+        });
+        match replica {
+            Ok(replica) => self.remote_change(id, &replica),
             Err(err) => self.stop_syncing(id, format!("failed to get snapshot: {err:#}")),
         }
     }

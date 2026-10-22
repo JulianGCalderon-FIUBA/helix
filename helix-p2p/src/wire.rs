@@ -32,6 +32,9 @@ impl From<TopicId> for SharedId {
 ///
 /// Gossip drops a message whose content it has seen recently.
 /// Nonces let requests be sent again.
+///
+/// Snapshots don't go over gossip, but between the owner and the peer
+/// opening the document, so they need no nonce.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
     Share {
@@ -47,6 +50,12 @@ pub enum Message {
     },
     Edit {
         update: Vec<u8>,
+    },
+    SnapshotRequest {
+        id: SharedId,
+    },
+    Snapshot {
+        replica: Vec<u8>,
     },
 }
 
