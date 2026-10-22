@@ -175,7 +175,6 @@ impl Session {
     pub fn shutdown(&mut self) {
         let ids: Vec<_> = self.replicas.keys().copied().collect();
         for id in ids {
-            // Unsharing our documents, so that peers stop listing them.
             self.unsync(id);
             self.events.push_back(Event::Unshared {
                 id,
