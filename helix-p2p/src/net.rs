@@ -383,7 +383,6 @@ async fn request(endpoint: &Endpoint, peer: EndpointId, message: &[u8]) -> Resul
     send.write_all(message).await?;
     send.finish()?;
     let response = recv.read_to_end(MAX_MESSAGE_SIZE).await?;
-    // We close once we have read everything, since the peer waits for it.
     connection.close(0u32.into(), b"done");
     Ok(response.into())
 }
