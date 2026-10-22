@@ -31,7 +31,7 @@ impl From<TopicId> for SharedId {
 /// Messages on a document's topic are about that document.
 ///
 /// Gossip drops a message whose content it has seen recently.
-/// Nonces let requests and snapshots be sent again.
+/// Nonces let requests be sent again.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
     Share {
@@ -44,13 +44,6 @@ pub enum Message {
     },
     DocumentsRequest {
         nonce: u64,
-    },
-    SnapshotRequest {
-        nonce: u64,
-    },
-    Snapshot {
-        nonce: u64,
-        replica: Vec<u8>,
     },
     Edit {
         update: Vec<u8>,

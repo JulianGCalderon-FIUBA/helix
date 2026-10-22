@@ -49,6 +49,7 @@ pub enum Transmit {
     Subscribe(TopicId, Vec<EndpointId>),
     Unsubscribe(TopicId),
     Broadcast(Channel, Bytes),
+    RequestSnapshot(TopicId, EndpointId),
     Shutdown,
 }
 
@@ -105,17 +106,35 @@ impl Session {
             .get(&id)
             .with_context(|| format!("{} is no longer shared", id.fmt_short()))?;
         log::info!("opening {}", meta.label());
+        let owner = meta.owner;
 
+        // We subscribe before asking for the snapshot, so that no edit made
+        // after it is missed. Edits that arrive before it need no queue:
+        // the replica keeps them pending until the snapshot fills in their
+        // dependencies, and then applies them.
         self.replicas.insert(id, Replica::empty());
         self.transmits
-            .push_back(Transmit::Subscribe(id.topic(), vec![meta.owner]));
-
-        let nonce = self.rng.random();
-        self.broadcast(
-            Channel::Document(id.topic()),
-            &Message::SnapshotRequest { nonce },
-        );
+            .push_back(Transmit::Subscribe(id.topic(), vec![owner]));
+        self.transmits
+            .push_back(Transmit::RequestSnapshot(id.topic(), owner));
         Ok(())
+    }
+
+    /// A peer asks for a document's snapshot. Only the owner answers.
+    pub fn snapshot(&self, id: SharedId) -> Option<Vec<u8>> {
+        if !self.owns(id) {
+            return None;
+        }
+        log::debug!("sending snapshot of {}", id.fmt_short());
+        self.replicas.get(&id).map(Replica::encode)
+    }
+
+    /// The owner answered our snapshot request.
+    pub fn receive_snapshot(&mut self, id: SharedId, snapshot: Result<Vec<u8>>) {
+        match snapshot {
+            Ok(snapshot) => self.remote_change(id, &snapshot),
+            Err(err) => self.stop_syncing(id, format!("failed to get snapshot: {err:#}")),
+        }
     }
 
     pub fn local_change(&mut self, id: SharedId, changes: &ChangeSet) {
@@ -179,34 +198,11 @@ impl Session {
             }
             (Channel::Session, Message::Unshare { id }) => {
                 self.documents.remove(&id);
-                if self.unsync(id) {
-                    self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
-                    self.events.push_back(Event::Unshared {
-                        id,
-                        reason: "owner unshared".to_string(),
-                    });
-                }
+                self.stop_syncing(id, "owner unshared".to_string());
             }
-            (Channel::Document(topic), Message::SnapshotRequest { .. }) => {
-                let id = SharedId::from(topic);
-                // Only the owner answers.
-                if !self.owns(id) {
-                    return;
-                }
-                let Some(replica) = self.replicas.get(&id) else {
-                    return;
-                };
-                log::debug!("sending snapshot of {}", id.fmt_short());
-                let message = Message::Snapshot {
-                    nonce: self.rng.random(),
-                    replica: replica.encode(),
-                };
-                self.broadcast(channel, &message);
+            (Channel::Document(topic), Message::Edit { update }) => {
+                self.remote_change(SharedId::from(topic), &update)
             }
-            (
-                Channel::Document(topic),
-                Message::Snapshot { replica, .. } | Message::Edit { update: replica },
-            ) => self.remote_change(SharedId::from(topic), &replica),
             (channel, _) => log::warn!("dropping message sent to the wrong channel {channel:?}"),
         }
     }
@@ -224,6 +220,14 @@ impl Session {
         };
         if !changes.is_empty() {
             self.events.push_back(Event::Changes { id, changes });
+        }
+    }
+
+    /// Stops syncing a document we opened, and tells the driver why.
+    fn stop_syncing(&mut self, id: SharedId, reason: String) {
+        if self.unsync(id) {
+            self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
+            self.events.push_back(Event::Unshared { id, reason });
         }
     }
 
