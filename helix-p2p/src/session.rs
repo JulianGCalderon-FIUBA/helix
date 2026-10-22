@@ -141,7 +141,7 @@ impl Session {
         self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
     }
 
-    pub fn transport_exit(&mut self, channel: Channel, reason: String) {
+    pub fn transport_exit(&mut self, channel: Channel) {
         match channel {
             Channel::Session => {
                 self.documents.clear();
@@ -153,7 +153,7 @@ impl Session {
                 if self.unsync(id) {
                     self.events.push_back(Event::Unshared {
                         id,
-                        reason: format!("topic lost: {reason}"),
+                        reason: "lost connection".to_string(),
                     });
                 }
             }
@@ -168,7 +168,7 @@ impl Session {
                         self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
                         self.events.push_back(Event::Unshared {
                             id,
-                            reason: format!("lost connection to owner: {reason}"),
+                            reason: "lost connection to owner".to_string(),
                         });
                     }
                 }
@@ -251,11 +251,16 @@ impl Session {
                 match replica {
                     Ok(replica) => self.remote_change(id, &replica),
                     Err(reason) => {
+                        log::warn!(
+                            "{} refused snapshot of {}: {reason}",
+                            peer.fmt_short(),
+                            id.fmt_short()
+                        );
                         if self.unsync(id) {
                             self.transmits.push_back(Transmit::Unsubscribe(id.topic()));
                             self.events.push_back(Event::Unshared {
                                 id,
-                                reason: format!("failed to get snapshot: {reason}"),
+                                reason: "owner refused snapshot".to_string(),
                             });
                         }
                     }

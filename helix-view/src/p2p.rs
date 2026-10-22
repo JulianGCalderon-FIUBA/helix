@@ -119,8 +119,8 @@ impl Editor {
             net::Event::Received(channel, message) => {
                 self.with_session(|session| session.receive(channel, &message))
             }
-            net::Event::Exit(channel, reason) => {
-                self.with_session(|session| session.transport_exit(channel, reason))
+            net::Event::Exit(channel) => {
+                self.with_session(|session| session.transport_exit(channel))
             }
         }
     }

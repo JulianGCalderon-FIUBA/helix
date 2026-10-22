@@ -55,7 +55,8 @@ impl fmt::Display for Channel {
 #[derive(Debug)]
 pub enum Event {
     Received(Channel, Bytes),
-    Exit(Channel, String),
+    /// The reason is logged here, so it isn't passed on.
+    Exit(Channel),
 }
 
 /// What the editor asks to the service.
@@ -434,7 +435,7 @@ impl Actor {
             Channel::Document(_) => self.unsubscribe(channel),
             Channel::Peer(peer) => self.disconnect(peer),
         }
-        let _ = self.events.send(Event::Exit(channel, reason));
+        let _ = self.events.send(Event::Exit(channel));
     }
 }
 
