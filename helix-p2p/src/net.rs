@@ -315,7 +315,7 @@ impl Actor {
     }
 
     async fn subscribe_document(&mut self, id: TopicId, bootstrap: Vec<EndpointId>) {
-        log::info!("subscribing to document {}", id.fmt_short());
+        log::debug!("subscribing to document {}", id.fmt_short());
         let subscription = if bootstrap.is_empty() {
             self.gossip.subscribe(id, bootstrap).await
         } else {
@@ -397,10 +397,10 @@ impl Actor {
     fn on_event(&mut self, channel: Channel, event: Option<Result<GossipEvent, ApiError>>) {
         match event {
             Some(Ok(GossipEvent::NeighborUp(id))) => {
-                log::info!("connected to {} in {channel}", id.fmt_short());
+                log::debug!("connected to {} in {channel}", id.fmt_short());
             }
             Some(Ok(GossipEvent::NeighborDown(id))) => {
-                log::info!("disconnected from {} in {channel}", id.fmt_short());
+                log::debug!("disconnected from {} in {channel}", id.fmt_short());
             }
             Some(Ok(GossipEvent::Received(message))) => {
                 log::trace!(
