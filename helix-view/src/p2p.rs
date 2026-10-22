@@ -154,7 +154,6 @@ impl Editor {
         let doc_id = self.new_file(action);
         doc_mut!(self, &doc_id).shared = Some(id);
 
-        // The buffer stays empty until the owner sends a snapshot.
         let meta = &self.p2p.documents()[&id];
         let status = format!("opening {} from {}", meta.label(), meta.owner.fmt_short());
         self.set_status(status);

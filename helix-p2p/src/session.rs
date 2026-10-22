@@ -184,12 +184,9 @@ impl Session {
         }
         self.documents.clear();
         self.pending.clear();
-        // The transport drops every topic on shutdown, so there is no need
-        // to unsubscribe from each document.
         self.transmits.push_back(Transmit::Shutdown);
     }
 
-    /// The transport lost the session, so there is nobody left to tell.
     fn exit(&mut self) {
         for (id, _) in self.replicas.drain() {
             self.events.push_back(Event::Unshared {
