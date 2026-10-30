@@ -20,9 +20,6 @@ use crate::{
 };
 
 /// What happened to a shared buffer locally.
-///
-/// Every kind goes through the same queue, so that the session sees
-/// them in the order they happened.
 pub(crate) enum LocalEvent {
     Change(SharedId, ChangeSet),
 }
