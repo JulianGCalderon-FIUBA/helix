@@ -360,3 +360,6 @@ impl Session {
             .is_some_and(|meta| meta.owner == self.me)
     }
 }
+
+#[cfg(test)]
+mod tests;
