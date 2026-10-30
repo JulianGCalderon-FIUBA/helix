@@ -1,8 +1,12 @@
 //! Bridges Helix's ChangeSets to CRDT operations.
 
-use anyhow::Result;
-use helix_core::{Change, ChangeSet, Operation, Rope};
-use loro::{event::Diff, ExportMode, LoroDoc, LoroText, TextDelta};
+use anyhow::{ensure, Context, Result};
+use helix_core::{Change, ChangeSet, Operation, Range, Rope, Selection};
+use loro::{
+    cursor::{Cursor, Side},
+    event::Diff,
+    ExportMode, LoroDoc, LoroText, TextDelta,
+};
 
 const TEXT_ID: &str = "text";
 
@@ -99,5 +103,44 @@ impl Replica {
         }
 
         Ok(changes)
+    }
+
+    /// Translate a local selection to one that other replicas can place,
+    /// even if they have seen different edits.
+    ///
+    /// Positions are sent as Loro cursors, which point at characters
+    /// instead of offsets, so concurrent edits don't shift them.
+    pub fn encode_selection(&self, selection: &Selection) -> Result<Vec<u8>> {
+        let cursor = |pos| {
+            self.text
+                .get_cursor(pos, Side::Middle)
+                .with_context(|| format!("no cursor at {pos}"))
+        };
+        // The selection can be ahead of the replica, after edits that
+        // were not synced (#44).
+        let len = self.text.len_unicode();
+        let ranges = selection
+            .iter()
+            .map(|range| {
+                ensure!(range.to() <= len, "selection is out of bounds");
+                Ok((cursor(range.anchor)?, cursor(range.head)?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(postcard::to_stdvec(&(ranges, selection.primary_index()))?)
+    }
+
+    /// Translate a remote selection to positions in this replica.
+    ///
+    /// Fails when it points at edits this replica hasn't seen yet.
+    pub fn decode_selection(&self, selection: &[u8]) -> Result<Selection> {
+        let (ranges, primary): (Vec<(Cursor, Cursor)>, usize) = postcard::from_bytes(selection)?;
+        ensure!(primary < ranges.len(), "primary range is out of bounds");
+
+        let pos = |cursor| -> Result<usize> { Ok(self.doc.get_cursor_pos(cursor)?.current.pos) };
+        let ranges = ranges
+            .iter()
+            .map(|(anchor, head)| Ok(Range::new(pos(anchor)?, pos(head)?)))
+            .collect::<Result<_>>()?;
+        Ok(Selection::new(ranges, primary))
     }
 }

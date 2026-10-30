@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use bytes::Bytes;
-use helix_core::{Change, ChangeSet, Rope};
+use helix_core::{Change, ChangeSet, Rope, Selection};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde::Serialize;
 
@@ -40,8 +40,19 @@ impl SharedMeta {
 /// What the session tells the driver.
 #[derive(Debug)]
 pub enum Event {
-    Changes { id: SharedId, changes: Vec<Change> },
-    Unshared { id: SharedId, reason: String },
+    Changes {
+        id: SharedId,
+        changes: Vec<Change>,
+    },
+    Selection {
+        id: SharedId,
+        peer: EndpointId,
+        selection: Selection,
+    },
+    Unshared {
+        id: SharedId,
+        reason: String,
+    },
 }
 
 /// What the transport must do.
@@ -134,6 +145,25 @@ impl Session {
             Channel::Document(id.topic()),
             &GossipMessage::Edit { update },
         );
+    }
+
+    pub fn local_selection(&mut self, id: SharedId, selection: &Selection) {
+        let Some(replica) = self.replicas.get(&id) else {
+            return;
+        };
+        let selection = match replica.encode_selection(selection) {
+            Ok(selection) => selection,
+            Err(err) => {
+                log::warn!("not sending selection in {}: {err:#}", id.fmt_short());
+                return;
+            }
+        };
+        let message = GossipMessage::Selection {
+            nonce: self.rng.random(),
+            peer: self.me,
+            selection,
+        };
+        self.send(Channel::Document(id.topic()), &message);
     }
 
     pub fn close(&mut self, id: SharedId) {
@@ -235,6 +265,12 @@ impl Session {
             (Channel::Document(topic), GossipMessage::Edit { update }) => {
                 self.remote_change(SharedId::from(topic), &update)
             }
+            (
+                Channel::Document(topic),
+                GossipMessage::Selection {
+                    peer, selection, ..
+                },
+            ) => self.remote_selection(SharedId::from(topic), peer, &selection),
             (channel, _) => log::warn!("dropping message sent to the wrong channel: {channel}"),
         }
     }
@@ -304,6 +340,26 @@ impl Session {
         };
         if !changes.is_empty() {
             self.events.push_back(Event::Changes { id, changes });
+        }
+    }
+
+    fn remote_selection(&mut self, id: SharedId, peer: EndpointId, selection: &[u8]) {
+        let Some(replica) = self.replicas.get(&id) else {
+            return;
+        };
+        // A selection that arrives before the edits it points at is
+        // dropped. The peer sends a new one as soon as it moves.
+        match replica.decode_selection(selection) {
+            Ok(selection) => self.events.push_back(Event::Selection {
+                id,
+                peer,
+                selection,
+            }),
+            Err(err) => log::debug!(
+                "dropping selection of {} in {}: {err:#}",
+                peer.fmt_short(),
+                id.fmt_short()
+            ),
         }
     }
 

@@ -42,7 +42,7 @@ use helix_core::{
     syntax::{self, config::LanguageConfiguration},
     ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, Syntax, Transaction,
 };
-use helix_p2p::wire::SharedId;
+use helix_p2p::{net::EndpointId, wire::SharedId};
 
 use crate::{
     editor::Config,
@@ -194,6 +194,9 @@ pub struct Document {
     pub history: Cell<History>,
     /// Present only while the document is shared with a session.
     pub shared: Option<SharedId>,
+    /// The latest selection of each peer in a shared document. They are
+    /// only drawn, and never change ours.
+    pub peer_selections: HashMap<EndpointId, Selection>,
     pub config: Arc<dyn DynAccess<Config>>,
 
     savepoints: Vec<Weak<SavePoint>>,
@@ -758,6 +761,7 @@ impl Document {
             version: 0,
             history: Cell::new(History::default()),
             shared: None,
+            peer_selections: HashMap::new(),
             savepoints: Vec::new(),
             last_saved_time: SystemTime::now(),
             last_saved_revision: 0,
@@ -1490,6 +1494,15 @@ impl Document {
                 // Map through changes
                 .map(transaction.changes())
                 // Ensure all selections across all views still adhere to invariants.
+                .ensure_invariants(self.text.slice(..));
+        }
+
+        // Peers only send their selection when it changes, so we keep
+        // it in place as the text changes.
+        for selection in self.peer_selections.values_mut() {
+            *selection = selection
+                .clone()
+                .map(transaction.changes())
                 .ensure_invariants(self.text.slice(..));
         }
 

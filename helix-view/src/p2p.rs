@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use anyhow::{ensure, Result};
-use helix_core::{ChangeSet, Transaction};
+use helix_core::{ChangeSet, Selection, Transaction};
 use helix_event::register_hook;
 use helix_p2p::{
     net::{self, Service},
@@ -15,13 +15,14 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::{
     editor::Action,
-    events::{DocumentDidChange, DocumentDidClose},
+    events::{DocumentDidChange, DocumentDidClose, SelectionDidChange},
     Document, DocumentId, Editor,
 };
 
 /// What happened to a shared buffer locally.
 pub(crate) enum LocalEvent {
     Change(SharedId, ChangeSet),
+    Selection(SharedId, Selection),
 }
 
 pub struct P2p {
@@ -62,6 +63,7 @@ impl P2p {
     fn apply_local_event(&mut self, event: LocalEvent) {
         match event {
             LocalEvent::Change(id, changes) => self.session.local_change(id, &changes),
+            LocalEvent::Selection(id, selection) => self.session.local_selection(id, &selection),
         }
     }
 
@@ -103,6 +105,16 @@ pub fn register_hooks(p2p: &P2p) {
         }
         if let Some(id) = event.doc.shared {
             let _ = local_events.send(LocalEvent::Change(id, event.changes.clone()));
+        }
+        Ok(())
+    });
+
+    // Queues selection changes in shared buffers, for peers to draw.
+    let local_events = p2p.local_events_tx.clone();
+    register_hook!(move |event: &mut SelectionDidChange<'_>| {
+        if let Some(id) = event.doc.shared {
+            let selection = event.doc.selection(event.view).clone();
+            let _ = local_events.send(LocalEvent::Selection(id, selection));
         }
         Ok(())
     });
@@ -191,11 +203,23 @@ impl Editor {
                 doc.apply(&transaction, view_id);
                 doc.shared = Some(id);
             }
+            Event::Selection {
+                id,
+                peer,
+                selection,
+            } => {
+                let Some(doc) = self.documents_mut().find(|doc| doc.shared == Some(id)) else {
+                    return;
+                };
+                let selection = selection.ensure_invariants(doc.text().slice(..));
+                doc.peer_selections.insert(peer, selection);
+            }
             Event::Unshared { id, reason } => {
                 let Some(doc) = self.documents_mut().find(|doc| doc.shared == Some(id)) else {
                     return;
                 };
                 doc.shared = None;
+                doc.peer_selections.clear();
                 let name = doc.display_name().into_owned();
                 self.set_status(format!("stopped syncing {name}: {reason}"));
             }
