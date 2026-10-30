@@ -2490,8 +2490,8 @@ impl Editor {
                 Some(event) = self.debug_adapters.incoming.next() => {
                     return EditorEvent::DebuggerEvent(event)
                 }
-                Some((id, changes)) = self.p2p.local_changes.recv() => {
-                    self.p2p.local_change(id, changes);
+                Some(event) = self.p2p.local_events.recv() => {
+                    self.p2p.local_event(event);
                     self.drain_session_queue();
                 }
                 Some(event) = self.p2p.incoming.next() => {
