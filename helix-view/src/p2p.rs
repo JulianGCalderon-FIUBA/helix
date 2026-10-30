@@ -19,39 +19,53 @@ use crate::{
     Document, DocumentId, Editor,
 };
 
+/// What happened to a shared buffer locally.
+///
+/// Every kind goes through the same queue, so that the session sees
+/// them in the order they happened.
+pub(crate) enum LocalEvent {
+    Change(SharedId, ChangeSet),
+}
+
 pub struct P2p {
     pub service: Service,
     session: Session,
     pub(crate) incoming: UnboundedReceiverStream<net::Event>,
-    /// Local changes to shared buffers cannot be applied directly by the hook.
-    local_changes_tx: UnboundedSender<(SharedId, ChangeSet)>,
-    pub(crate) local_changes: UnboundedReceiver<(SharedId, ChangeSet)>,
+    /// Local events in shared buffers cannot be applied directly by the hooks.
+    local_events_tx: UnboundedSender<LocalEvent>,
+    pub(crate) local_events: UnboundedReceiver<LocalEvent>,
 }
 
 impl P2p {
     pub fn new() -> Self {
         let (service, incoming) = Service::new();
-        let (local_changes_tx, local_changes) = unbounded_channel();
+        let (local_events_tx, local_events) = unbounded_channel();
         Self {
             session: Session::new(service.id(), rand::random()),
             service,
             incoming,
-            local_changes_tx,
-            local_changes,
+            local_events_tx,
+            local_events,
         }
     }
 
     pub fn session(&mut self) -> &mut Session {
         // The session must be up to date before taking any more inputs.
-        while let Ok((id, changes)) = self.local_changes.try_recv() {
-            self.session.local_change(id, &changes);
+        while let Ok(event) = self.local_events.try_recv() {
+            self.apply_local_event(event);
         }
         &mut self.session
     }
 
-    pub(crate) fn local_change(&mut self, id: SharedId, changes: ChangeSet) {
-        self.session.local_change(id, &changes);
+    pub(crate) fn local_event(&mut self, event: LocalEvent) {
+        self.apply_local_event(event);
         self.session();
+    }
+
+    fn apply_local_event(&mut self, event: LocalEvent) {
+        match event {
+            LocalEvent::Change(id, changes) => self.session.local_change(id, &changes),
+        }
     }
 
     pub fn documents(&self) -> &HashMap<SharedId, SharedMeta> {
@@ -84,14 +98,14 @@ pub fn register_hooks(p2p: &P2p) {
     });
 
     // Queues local edits to shared buffers.
-    let local_changes = p2p.local_changes_tx.clone();
+    let local_events = p2p.local_events_tx.clone();
     register_hook!(move |event: &mut DocumentDidChange<'_>| {
         // TODO: ghost transactions still change the buffer (#44).
         if event.ghost_transaction {
             return Ok(());
         }
         if let Some(id) = event.doc.shared {
-            let _ = local_changes.send((id, event.changes.clone()));
+            let _ = local_events.send(LocalEvent::Change(id, event.changes.clone()));
         }
         Ok(())
     });
