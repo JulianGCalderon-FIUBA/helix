@@ -423,3 +423,36 @@ fn malformed_messages_are_dropped() {
     assert_eq!(net.peer(guest).text(id), "hello");
     assert!(net.peer(guest).unshared.is_empty());
 }
+
+#[test]
+#[ignore = "#65"]
+fn opening_into_a_new_buffer_fetches_the_owner_text() {
+    let mut net = Network::default();
+    let owner = net.join();
+    let guest = net.join();
+    let id = net.peer(owner).share("hello");
+    net.flush();
+
+    // Opens a shared document should discard previous changes
+    // and keep the owner text.
+    net.peer(guest).open(id);
+    net.peer(guest).buffers.insert(id, Rope::from("\n"));
+    net.flush();
+
+    assert_eq!(net.peer(guest).text(id), "hello");
+}
+
+#[test]
+#[ignore = "#69"]
+fn leaving_ignores_announcements_already_on_their_way() {
+    let mut net = Network::default();
+    let owner = net.join();
+    let guest = net.join();
+
+    // The guest leaves before the announcement reaches it.
+    net.peer(owner).share("hello");
+    net.peer(guest).session.shutdown();
+    net.flush();
+
+    assert!(net.peer(guest).session.documents().is_empty());
+}
