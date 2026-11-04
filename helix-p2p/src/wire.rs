@@ -38,8 +38,6 @@ pub enum GossipMessage {
         id: SharedId,
         owner: EndpointId,
         path: Option<PathBuf>,
-        /// Owners announce again when a peer joins. Without a nonce, gossip
-        /// would only deliver it to the owner's direct neighbors.
         nonce: u64,
     },
     Unshare {
