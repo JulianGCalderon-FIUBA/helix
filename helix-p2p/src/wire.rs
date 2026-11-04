@@ -31,13 +31,14 @@ impl From<TopicId> for SharedId {
 /// Messages on a document's topic are about that document.
 ///
 /// Gossip drops a message whose content it has seen recently.
-/// Nonces let requests be sent again.
+/// Nonces let messages be sent again.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GossipMessage {
     Share {
         id: SharedId,
         owner: EndpointId,
         path: Option<PathBuf>,
+        nonce: u64,
     },
     Unshare {
         id: SharedId,
