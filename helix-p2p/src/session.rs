@@ -214,7 +214,12 @@ impl Session {
 
         match (channel, message) {
             (Channel::Session, GossipMessage::DocumentsRequest { .. }) => self.announce_owned(),
-            (Channel::Session, GossipMessage::Share { id, owner, path, .. }) => {
+            (
+                Channel::Session,
+                GossipMessage::Share {
+                    id, owner, path, ..
+                },
+            ) => {
                 let meta = SharedMeta { id, owner, path };
                 if self.documents.insert(id, meta).is_none() {
                     log::info!("{} shared {}", owner.fmt_short(), id.fmt_short());
