@@ -3004,7 +3004,6 @@ fn session_join(
         Ok(job::Callback::Editor(Box::new(
             move |editor: &mut Editor| match result {
                 Ok(()) => editor.set_status("joined session"),
-                // The transport reports the failure as an exit, which leaves.
                 Err(err) => editor.set_error(format!("failed to join session: {err:#}")),
             },
         )))
