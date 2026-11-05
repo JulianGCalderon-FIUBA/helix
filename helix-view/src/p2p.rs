@@ -1,4 +1,25 @@
 //! Glue between the editor and the helix-p2p session.
+//!
+//! # Events
+//!
+//! Local events are edits to shared buffers. The `DocumentDidChange` hook
+//! can't reach the session, so it queues them. They are applied when
+//! `wait_event` returns them as `P2pEvent::Local`, or earlier by
+//! `with_session`, which applies every queued edit before giving the session
+//! any other input. Closing a shared buffer isn't queued: its hook calls
+//! `with_session` directly.
+//!
+//! Network events come from the transport. `wait_event` returns them as
+//! `P2pEvent::Net`, after any queued local edit:
+//! - `Received` goes to the session.
+//! - `Exit` of the session's topic leaves the session. Any other `Exit` goes
+//!   to the session, which stops syncing the documents that depended on it.
+//!
+//! Session events are the session's output. After every input,
+//! `drain_session_queue` sends the session's messages to the transport and
+//! applies its events:
+//! - `Changes` applies remote edits to the buffer.
+//! - `Unshared` stops syncing the buffer.
 
 use std::{future::Future, iter};
 
