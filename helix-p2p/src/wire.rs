@@ -43,7 +43,6 @@ pub enum GossipMessage {
     Unshare {
         id: SharedId,
     },
-    /// Sent on joining, and in reply to a peer we didn't know.
     Hello {
         peer: EndpointId,
         name: String,
