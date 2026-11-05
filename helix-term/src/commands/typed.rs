@@ -3006,6 +3006,17 @@ fn session_unshare(
     p2p::unshare(cx.editor)
 }
 
+fn session_info(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    p2p::info(cx.editor)
+}
+
 fn session_close(
     cx: &mut compositor::Context,
     _args: Args,
@@ -4202,6 +4213,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         aliases: &[],
         doc: "Stop syncing the focused buffer. Peers lose it only if you shared it.",
         fun: session_unshare,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "session-info",
+        aliases: &[],
+        doc: "Show the status of the current collaborative session.",
+        fun: session_info,
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),
