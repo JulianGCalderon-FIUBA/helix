@@ -3,7 +3,7 @@
 use std::{future::Future, iter};
 
 use anyhow::{ensure, Context, Result};
-use helix_core::{ChangeSet, Transaction};
+use helix_core::{Change, ChangeSet, Transaction};
 use helix_event::register_hook;
 use helix_p2p::{
     net::{self, Channel, Service},
@@ -292,19 +292,13 @@ impl Editor {
 
     fn apply_session_event(&mut self, event: Event) {
         match event {
-            Event::Changes { id, changes } => {
-                let Some(doc_id) = self.shared_document(id).map(Document::id) else {
+            Event::Changes { id, changes } => self.apply_remote_changes(id, changes),
+            Event::Opened { id, text } => {
+                let Some(doc) = self.shared_document(id) else {
                     return;
                 };
-                let view_id = self.get_synced_view_id(doc_id);
-                let doc = doc_mut!(self, &doc_id);
-
-                // Take the marker off while applying, so that the hook
-                // doesn't send the remote edit back out as a local one.
-                doc.shared = None;
-                let transaction = Transaction::change(doc.text(), changes.into_iter());
-                doc.apply(&transaction, view_id);
-                doc.shared = Some(id);
+                let len = doc.text().len_chars();
+                self.apply_remote_changes(id, vec![(0, len, Some(text.into()))]);
             }
             Event::Unshared { id, reason } => {
                 let Some(doc) = self.documents_mut().find(|doc| doc.shared == Some(id)) else {
@@ -315,5 +309,20 @@ impl Editor {
                 self.set_status(format!("stopped syncing {name}: {reason}"));
             }
         }
+    }
+
+    fn apply_remote_changes(&mut self, id: SharedId, changes: Vec<Change>) {
+        let Some(doc_id) = self.shared_document(id).map(Document::id) else {
+            return;
+        };
+        let view_id = self.get_synced_view_id(doc_id);
+        let doc = doc_mut!(self, &doc_id);
+
+        // Take the marker off while applying, so that the hook
+        // doesn't send the remote edit back out as a local one.
+        doc.shared = None;
+        let transaction = Transaction::change(doc.text(), changes.into_iter());
+        doc.apply(&transaction, view_id);
+        doc.shared = Some(id);
     }
 }
