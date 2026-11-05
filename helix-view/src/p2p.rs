@@ -11,7 +11,7 @@ use helix_p2p::{
     wire::SharedId,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 
 use crate::{
     editor::Action,
@@ -24,16 +24,22 @@ pub(crate) enum LocalEvent {
     Change(SharedId, ChangeSet),
 }
 
-/// Lives as long as the editor. The transport outlives every session, since
-/// our identity and connections belong to the process.
+/// Something for the editor to handle.
+pub(crate) enum Input {
+    Local(LocalEvent),
+    Net(net::Event),
+}
+
+/// Lives as long as the editor while p2p is enabled. The transport outlives
+/// every session, since our identity and connections belong to the process.
 pub struct P2p {
     transport: Service,
     /// Only while in a session.
     session: Option<Session>,
-    pub(crate) incoming: UnboundedReceiverStream<net::Event>,
+    incoming: UnboundedReceiverStream<net::Event>,
     /// Local events in shared buffers cannot be applied directly by the hooks.
     local_events_tx: UnboundedSender<LocalEvent>,
-    pub(crate) local_events: UnboundedReceiver<LocalEvent>,
+    local_events: UnboundedReceiver<LocalEvent>,
 }
 
 impl P2p {
@@ -53,17 +59,23 @@ impl P2p {
         self.session.as_ref()
     }
 
+    pub(crate) async fn next(&mut self) -> Input {
+        tokio::select! {
+            // Local edits come first, so that remote edits apply on top of them.
+            biased;
+            Some(event) = self.local_events.recv() => Input::Local(event),
+            Some(event) = self.incoming.next() => Input::Net(event),
+            // We hold a sender, so the local queue stays open.
+            else => unreachable!("local event queue closed"),
+        }
+    }
+
     fn session_mut(&mut self) -> Option<&mut Session> {
         // The session must be up to date before taking any more inputs.
         while let Ok(event) = self.local_events.try_recv() {
             self.apply_local_event(event);
         }
         self.session.as_mut()
-    }
-
-    pub(crate) fn local_event(&mut self, event: LocalEvent) {
-        self.apply_local_event(event);
-        self.session_mut();
     }
 
     fn apply_local_event(&mut self, event: LocalEvent) {
@@ -116,23 +128,43 @@ pub fn register_hooks(p2p: &P2p) {
 }
 
 impl Editor {
+    fn p2p_mut(&mut self) -> Result<&mut P2p> {
+        self.p2p.as_mut().context("p2p is disabled")
+    }
+
     pub fn session(&self) -> Result<&Session> {
-        self.p2p.session().context("not in a session")
+        let p2p = self.p2p.as_ref().context("p2p is disabled")?;
+        p2p.session().context("not in a session")
     }
 
     /// Gives the session as input and afterwards drains the output queue.
     pub fn with_session<T>(&mut self, f: impl FnOnce(&mut Session) -> T) -> Result<T> {
-        let session = self.p2p.session_mut().context("not in a session")?;
+        let session = self.p2p_mut()?.session_mut().context("not in a session")?;
         let result = f(session);
         self.drain_session_queue();
         Ok(result)
     }
 
-    pub(crate) fn drain_session_queue(&mut self) {
-        while let Some(transmit) = self.p2p.session.as_mut().and_then(Session::poll_transmit) {
-            self.p2p.transmit(transmit);
+    pub(crate) fn handle_local_event(&mut self, event: LocalEvent) {
+        let Some(p2p) = &mut self.p2p else {
+            return;
+        };
+        p2p.apply_local_event(event);
+        self.drain_session_queue();
+    }
+
+    fn drain_session_queue(&mut self) {
+        let Some(p2p) = &mut self.p2p else {
+            return;
+        };
+        while let Some(transmit) = p2p.session.as_mut().and_then(Session::poll_transmit) {
+            p2p.transmit(transmit);
         }
-        while let Some(event) = self.p2p.session.as_mut().and_then(Session::poll_event) {
+        while let Some(event) = self
+            .p2p
+            .as_mut()
+            .and_then(|p2p| p2p.session.as_mut()?.poll_event())
+        {
             self.apply_session_event(event);
         }
     }
@@ -157,8 +189,8 @@ impl Editor {
 
     /// Creates a session if we aren't in one, and returns an invitation
     /// into it.
-    pub fn session_ticket(&mut self) -> impl Future<Output = String> + 'static {
-        let p2p = &mut self.p2p;
+    pub fn session_ticket(&mut self) -> Result<impl Future<Output = String> + 'static> {
+        let p2p = self.p2p_mut()?;
         let session = p2p.session.get_or_insert_with(|| {
             let session = Session::create(p2p.transport.id(), rand::random());
             // Nobody else is in a new session, so there is nothing to wait for.
@@ -167,10 +199,10 @@ impl Editor {
         });
         let topic = session.topic();
         let addr = p2p.transport.addr();
-        async move {
+        Ok(async move {
             let addr = addr.await;
             SessionTicket { topic, addr }.encode_string()
-        }
+        })
     }
 
     /// Joins the session in the ticket. Returns its topic and a future that
@@ -179,7 +211,7 @@ impl Editor {
         &mut self,
         ticket: &str,
     ) -> Result<(net::TopicId, impl Future<Output = Result<()>> + 'static)> {
-        let p2p = &mut self.p2p;
+        let p2p = self.p2p_mut()?;
         ensure!(p2p.session.is_none(), "already in a session");
         let SessionTicket { topic, addr } = SessionTicket::decode_string(ticket)?;
         ensure!(
@@ -197,7 +229,7 @@ impl Editor {
 
     /// Unshares our documents and stops syncing every buffer.
     pub fn leave_session(&mut self) -> Result<()> {
-        let p2p = &mut self.p2p;
+        let p2p = self.p2p_mut()?;
         let session = p2p.session.take().context("not in a session")?;
         for transmit in session.leave() {
             p2p.transmit(transmit);

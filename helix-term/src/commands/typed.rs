@@ -2971,7 +2971,7 @@ fn session_ticket(
         return Ok(());
     }
 
-    let ticket = cx.editor.session_ticket();
+    let ticket = cx.editor.session_ticket()?;
     cx.jobs.callback(async move {
         let ticket = ticket.await;
         Ok(job::Callback::EditorCompositor(Box::new(

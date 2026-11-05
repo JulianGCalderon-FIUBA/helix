@@ -435,6 +435,20 @@ pub struct Config {
     pub buffer_picker: BufferPickerConfig,
     /// Workspace-trust configuration.
     pub workspace_trust: WorkspaceTrustConfig,
+    pub p2p: P2pConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct P2pConfig {
+    /// Enables collaborative sessions. Only read at startup.
+    pub enable: bool,
+}
+
+impl Default for P2pConfig {
+    fn default() -> Self {
+        Self { enable: true }
+    }
 }
 
 /// User-facing configuration for `[editor.workspace-trust]`.
@@ -1241,6 +1255,7 @@ impl Default for Config {
             kitty_keyboard_protocol: Default::default(),
             buffer_picker: BufferPickerConfig::default(),
             workspace_trust: WorkspaceTrustConfig::default(),
+            p2p: P2pConfig::default(),
         }
     }
 }
@@ -1344,7 +1359,8 @@ pub struct Editor {
     pub mouse_down_range: Option<Range>,
     pub cursor_cache: CursorCache,
     pub workspace_trust: WorkspaceTrust,
-    pub p2p: p2p::P2p,
+    /// Only when p2p is enabled.
+    pub p2p: Option<p2p::P2p>,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1471,7 +1487,7 @@ impl Editor {
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
             workspace_trust,
-            p2p: p2p::P2p::new(),
+            p2p: conf.p2p.enable.then(p2p::P2p::new),
         }
     }
 
@@ -2490,13 +2506,11 @@ impl Editor {
                 Some(event) = self.debug_adapters.incoming.next() => {
                     return EditorEvent::DebuggerEvent(event)
                 }
-                Some(event) = self.p2p.local_events.recv() => {
-                    self.p2p.local_event(event);
-                    self.drain_session_queue();
-                }
-                Some(event) = self.p2p.incoming.next() => {
-                    return EditorEvent::P2pEvent(event)
-                }
+                // Without p2p this resolves to `None`, which disables the branch.
+                Some(input) = async { Some(self.p2p.as_mut()?.next().await) } => match input {
+                    p2p::Input::Local(event) => self.handle_local_event(event),
+                    p2p::Input::Net(event) => return EditorEvent::P2pEvent(event),
+                },
 
                 _ = helix_event::redraw_requested() => {
                     if  !self.needs_redraw{
