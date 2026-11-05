@@ -4178,7 +4178,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-new",
         aliases: &[],
-        doc: "Yank a ticket to the current session to the clipboard, starting one if there is none.",
+        doc: "Yank a ticket to the current session to the clipboard, starting one if required.",
         fun: session_new,
         completer: CommandCompleter::none(),
         signature: Signature {

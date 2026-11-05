@@ -422,7 +422,7 @@ impl MappableCommand {
         diagnostics_picker, "Open diagnostic picker",
         workspace_diagnostics_picker, "Open workspace diagnostic picker",
         last_picker, "Open last picker",
-        session_new, "Yank a ticket to the current session to the clipboard, starting one if there is none",
+        session_new, "Yank a ticket to the current session to the clipboard, starting one if required",
         session_join, "Join the session with the ticket in the clipboard",
         session_share, "Share the focused buffer",
         session_unshare, "Stop syncing the focused buffer, unsharing it if you own it",
