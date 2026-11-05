@@ -98,8 +98,7 @@ impl Network {
         id
     }
 
-    /// Removes the peer and delivers the messages it sends while leaving,
-    /// such as unsharing its documents.
+    /// Removes the peer and delivers the messages it sends while leaving.
     fn leave(&mut self, id: EndpointId) {
         let index = self
             .peers
