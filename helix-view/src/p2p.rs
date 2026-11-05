@@ -1,6 +1,6 @@
 //! Glue between the editor and the helix-p2p session.
 
-use std::future::Future;
+use std::{future::Future, iter};
 
 use anyhow::{ensure, Context, Result};
 use helix_core::{ChangeSet, Transaction};
@@ -24,7 +24,7 @@ pub(crate) enum LocalEvent {
     Change(SharedId, ChangeSet),
 }
 
-pub(crate) enum Input {
+pub(crate) enum P2pEvent {
     Local(LocalEvent),
     Net(net::Event),
 }
@@ -55,12 +55,12 @@ impl P2p {
         self.session.as_ref()
     }
 
-    pub(crate) async fn next(&mut self) -> Input {
+    pub(crate) async fn next(&mut self) -> P2pEvent {
         // Local edits come first, so that remote edits apply on top of them.
         tokio::select! {
             biased;
-            Some(event) = self.local_events.recv() => Input::Local(event),
-            Some(event) = self.incoming.next() => Input::Net(event),
+            Some(event) = self.local_events.recv() => P2pEvent::Local(event),
+            Some(event) = self.incoming.next() => P2pEvent::Net(event),
             else => unreachable!("local event queue closed"),
         }
     }
@@ -155,16 +155,13 @@ impl Editor {
         while let Some(transmit) = p2p.session.as_mut().and_then(Session::poll_transmit) {
             p2p.transmit(transmit);
         }
-        while let Some(event) = self
-            .p2p
-            .as_mut()
-            .and_then(|p2p| p2p.session.as_mut()?.poll_event())
-        {
+        let events: Vec<_> = iter::from_fn(|| p2p.session.as_mut()?.poll_event()).collect();
+        for event in events {
             self.apply_session_event(event);
         }
     }
 
-    pub fn handle_p2p_event(&mut self, event: net::Event) {
+    pub fn handle_p2p_net_event(&mut self, event: net::Event) {
         match event {
             net::Event::Exit(Channel::Topic(topic))
                 if self.session().is_ok_and(|session| session.topic() == topic) =>

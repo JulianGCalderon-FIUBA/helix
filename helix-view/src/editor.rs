@@ -2507,8 +2507,8 @@ impl Editor {
                 }
                 // Without p2p this resolves to `None`, which disables the branch.
                 Some(input) = async { Some(self.p2p.as_mut()?.next().await) } => match input {
-                    p2p::Input::Local(event) => self.handle_local_event(event),
-                    p2p::Input::Net(event) => return EditorEvent::P2pEvent(event),
+                    p2p::P2pEvent::Local(event) => self.handle_local_event(event),
+                    p2p::P2pEvent::Net(event) => return EditorEvent::P2pEvent(event),
                 },
 
                 _ = helix_event::redraw_requested() => {
