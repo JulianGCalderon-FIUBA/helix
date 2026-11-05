@@ -574,4 +574,4 @@ Controls collaborative sessions.
 
 | Key      | Description                                                              | Default |
 | ---      | ---                                                                      | ---     |
-| `enable` | Enables collaborative sessions. Changes take effect after a restart.     | `true`  |
+| `enable` | Enable p2p module                                                        | `true`  |
