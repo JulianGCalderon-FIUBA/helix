@@ -4178,7 +4178,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-new",
         aliases: &[],
-        doc: "Yank a ticket to the current session to the clipboard, starting one if required.",
+        doc: "Yank current session ticket to clipboard, starting one if required.",
         fun: session_new,
         completer: CommandCompleter::none(),
         signature: Signature {
@@ -4189,7 +4189,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-join",
         aliases: &[],
-        doc: "Join the session with the given ticket, or the one in the clipboard.",
+        doc: "Join session from given or clipboard ticket.",
         fun: session_join,
         completer: CommandCompleter::none(),
         signature: Signature {
@@ -4200,7 +4200,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-share",
         aliases: &[],
-        doc: "Share the focused buffer.",
+        doc: "Share focused buffer.",
         fun: session_share,
         completer: CommandCompleter::none(),
         signature: Signature {
@@ -4211,7 +4211,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-unshare",
         aliases: &[],
-        doc: "Stop syncing the focused buffer.",
+        doc: "Stop syncing focused buffer.",
         fun: session_unshare,
         completer: CommandCompleter::none(),
         signature: Signature {
@@ -4222,7 +4222,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-info",
         aliases: &[],
-        doc: "Show the session status.",
+        doc: "Show session status.",
         fun: session_info,
         completer: CommandCompleter::none(),
         signature: Signature {
@@ -4233,7 +4233,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-close",
         aliases: &[],
-        doc: "Leave the session.",
+        doc: "Leave session.",
         fun: session_close,
         completer: CommandCompleter::none(),
         signature: Signature {

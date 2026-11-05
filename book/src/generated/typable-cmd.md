@@ -100,9 +100,9 @@
 | `:workspace-trust` | Allow language servers and local config for the current workspace. |
 | `:workspace-untrust` | Revoke the current workspace's trust grant or exclusion. |
 | `:workspace-exclude` | Mark the current workspace as never-prompt. Never prompts for trust again. |
-| `:session-new` | Yank a ticket to the current session to the clipboard, starting one if required. |
-| `:session-join` | Join the session with the given ticket, or the one in the clipboard. |
-| `:session-share` | Share the focused buffer. |
-| `:session-unshare` | Stop syncing the focused buffer. |
-| `:session-info` | Show the session status. |
-| `:session-close` | Leave the session. |
+| `:session-new` | Yank current session ticket to clipboard, starting one if required. |
+| `:session-join` | Join session from given or clipboard ticket. |
+| `:session-share` | Share focused buffer. |
+| `:session-unshare` | Stop syncing focused buffer. |
+| `:session-info` | Show session status. |
+| `:session-close` | Leave session. |
