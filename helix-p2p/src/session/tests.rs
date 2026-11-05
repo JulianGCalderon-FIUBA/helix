@@ -85,7 +85,6 @@ struct Network {
 impl Network {
     fn join(&mut self) -> EndpointId {
         let id = SecretKey::generate().public();
-        // The network has a single session, so its topic doesn't matter.
         let session = Session::join(id, TopicId::from_bytes([0; 32]), rand::random());
         self.peers.push(Peer {
             session,
