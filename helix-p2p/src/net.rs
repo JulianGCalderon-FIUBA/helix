@@ -56,7 +56,7 @@ pub enum Event {
 /// What the editor asks to the service.
 #[derive(Debug)]
 enum Request {
-    Addr(oneshot::Sender<EndpointAddr>),
+    Address(oneshot::Sender<EndpointAddr>),
     AddAddress(EndpointAddr),
     Subscribe(TopicId, Vec<EndpointId>, oneshot::Sender<Result<()>>),
     Unsubscribe(TopicId),
@@ -98,7 +98,7 @@ impl Service {
 
     pub fn addr(&self) -> impl Future<Output = EndpointAddr> + 'static {
         let (tx, rx) = oneshot::channel();
-        self.request(Request::Addr(tx));
+        self.request(Request::Address(tx));
         async move { rx.await.expect("actor should reply") }
     }
 
@@ -221,7 +221,7 @@ impl Actor {
 
     async fn handle(&mut self, request: Request) {
         match request {
-            Request::Addr(chan) => {
+            Request::Address(chan) => {
                 let _ = chan.send(self.endpoint.addr());
             }
             Request::AddAddress(addr) => self.addresses.add_endpoint_info(addr),
