@@ -189,7 +189,7 @@ impl Editor {
             session
         });
         let topic = session.topic();
-        let addr = p2p.transport.addr();
+        let addr = p2p.transport.address();
         Ok(async move {
             let addr = addr.await;
             SessionTicket { topic, addr }.encode_string()

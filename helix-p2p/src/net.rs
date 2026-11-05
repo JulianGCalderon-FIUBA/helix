@@ -96,7 +96,7 @@ impl Service {
         self.id
     }
 
-    pub fn addr(&self) -> impl Future<Output = EndpointAddr> + 'static {
+    pub fn address(&self) -> impl Future<Output = EndpointAddr> + 'static {
         let (tx, rx) = oneshot::channel();
         self.request(Request::Address(tx));
         async move { rx.await.expect("actor should reply") }
