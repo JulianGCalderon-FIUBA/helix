@@ -1,6 +1,6 @@
 //! Glue between the editor and the helix-p2p session.
 
-use std::{future::Future, iter};
+use std::{future::Future, iter, path::Path};
 
 use anyhow::{ensure, Context, Result};
 use helix_core::{ChangeSet, Transaction};
@@ -14,6 +14,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 
 use crate::{
+    document::SCRATCH_BUFFER_NAME,
     editor::Action,
     events::{DocumentDidChange, DocumentDidClose},
     Document, DocumentId, Editor,
@@ -247,6 +248,30 @@ impl Editor {
         Ok(())
     }
 
+    pub fn remote_full_name(&self, doc: &Document) -> Option<String> {
+        let (owner, path) = self.remote_path(doc)?;
+        Some(format!("{owner}:{}", path.display()))
+    }
+
+    pub fn remote_base_name(&self, doc: &Document) -> Option<String> {
+        let (owner, path) = self.remote_path(doc)?;
+        let name = path.file_name().map_or(path, Path::new);
+        Some(format!("{owner}:{}", name.display()))
+    }
+
+    fn remote_path(&self, doc: &Document) -> Option<(String, &Path)> {
+        let session = self.session().ok()?;
+        let meta = session.documents().get(&doc.shared?)?;
+        if session.owns(meta.id) {
+            return None;
+        }
+        let path = meta.path.as_deref();
+        Some((
+            session.name(meta.owner),
+            path.unwrap_or(Path::new(SCRATCH_BUFFER_NAME)),
+        ))
+    }
+
     pub fn shared_document(&self, id: SharedId) -> Option<&Document> {
         self.documents().find(|doc| doc.shared == Some(id))
     }
@@ -280,12 +305,19 @@ impl Editor {
         }
 
         self.with_session(|session| session.open(id))??;
-        let doc_id = self.new_file(action);
-        doc_mut!(self, &doc_id).shared = Some(id);
-
         let session = self.session()?;
         let meta = &session.documents()[&id];
         let status = format!("opening {} from {}", meta.label(), session.name(meta.owner));
+        let path = meta.path.clone();
+
+        let doc_id = self.new_file(action);
+        let loader = self.syn_loader.load();
+        let doc = doc_mut!(self, &doc_id);
+        doc.shared = Some(id);
+        if let Some(language) = path.and_then(|path| loader.language_for_filename(&path)) {
+            doc.set_language(Some(loader.language(language).config().clone()), &loader);
+        }
+
         self.set_status(status);
         Ok(())
     }
