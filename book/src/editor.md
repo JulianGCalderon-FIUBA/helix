@@ -570,7 +570,7 @@ trusted = ["~/src/github.com/me/*"]
 
 ### `[editor.p2p]` Section
 
-Controls collaborative sessions.
+Controls p2p module.
 
 | Key      | Description                                                              | Default |
 | ---      | ---                                                                      | ---     |
