@@ -52,8 +52,6 @@ pub enum Transmit {
     Send(Channel, Bytes),
 }
 
-/// One collaborative session. Leaving it drops it, so a new session never
-/// sees the state of an old one.
 pub struct Session {
     me: EndpointId,
     /// The swarm that every member is in.
