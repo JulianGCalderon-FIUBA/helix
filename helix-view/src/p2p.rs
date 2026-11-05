@@ -24,17 +24,12 @@ pub(crate) enum LocalEvent {
     Change(SharedId, ChangeSet),
 }
 
-/// The next thing p2p needs the editor for, from [`P2p::next`].
-///
-/// Both queues are merged into one future so that `Editor::wait_event` can
-/// wait on p2p with a single branch, which is disabled when p2p is off.
+/// Events that should be handled by the editor.
 pub(crate) enum P2pEvent {
-    /// An edit to a shared buffer, queued by the hooks because they can't
-    /// reach the session. Handle it right away, inside `wait_event`: it only
-    /// updates the session and doesn't need a redraw.
+    /// A local event queued by the hooks because they can't
+    /// reach the session. Must be handled right away.
     Local(LocalEvent),
-    /// Something the transport received or lost. Return it to the
-    /// application, which handles it and redraws.
+    /// An remote network event.
     Net(net::Event),
 }
 
@@ -64,7 +59,7 @@ impl P2p {
         self.session.as_ref()
     }
 
-    pub(crate) async fn next(&mut self) -> P2pEvent {
+    pub(crate) async fn next_event(&mut self) -> P2pEvent {
         // Local edits come first, so that remote edits apply on top of them.
         tokio::select! {
             biased;
@@ -94,7 +89,8 @@ impl P2p {
     fn transmit(&self, transmit: Transmit) {
         match transmit {
             Transmit::Subscribe(topic, bootstrap) => {
-                drop(self.transport.subscribe(topic, bootstrap))
+                let future = self.transport.subscribe(topic, bootstrap);
+                drop(future)
             }
             Transmit::Unsubscribe(topic) => self.transport.unsubscribe(topic),
             Transmit::Send(channel, message) => self.transport.send(channel, message),
