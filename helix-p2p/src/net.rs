@@ -107,8 +107,7 @@ impl Service {
         self.request(Request::AddAddress(addr));
     }
 
-    /// The request is sent right away, so the future can be dropped. A topic
-    /// that fails to open exits like a lost one.
+    /// The request is sent right away, so the future can be dropped.
     pub fn subscribe(
         &self,
         topic: TopicId,
