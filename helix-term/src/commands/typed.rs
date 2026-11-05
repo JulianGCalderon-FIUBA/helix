@@ -2971,7 +2971,7 @@ fn session_ticket(
         return Ok(());
     }
 
-    let ticket = cx.editor.p2p.service.ticket();
+    let ticket = cx.editor.session_ticket()?;
     cx.jobs.callback(async move {
         let ticket = ticket.await;
         Ok(job::Callback::EditorCompositor(Box::new(
@@ -2997,16 +2997,13 @@ fn session_join(
         return Ok(());
     }
 
-    let join = cx.editor.p2p.service.join(args[0].to_string());
+    let joined = cx.editor.join_session(&args[0])?;
     cx.editor.set_status("joining session");
     cx.jobs.callback(async move {
-        let result = join.await;
+        let result = joined.await;
         Ok(job::Callback::Editor(Box::new(
             move |editor: &mut Editor| match result {
-                Ok(()) => {
-                    editor.join_session();
-                    editor.set_status("joined session");
-                }
+                Ok(()) => editor.set_status("joined session"),
                 Err(err) => editor.set_error(format!("failed to join session: {err:#}")),
             },
         )))
@@ -3026,7 +3023,7 @@ fn session_share(
     let doc_id = doc!(cx.editor).id();
     let id = cx.editor.share_document(doc_id)?;
 
-    let label = cx.editor.p2p.documents()[&id].label();
+    let label = cx.editor.session()?.documents()[&id].label();
     cx.editor.set_status(format!("shared {label}"));
     Ok(())
 }
@@ -3040,10 +3037,11 @@ fn session_files(
         return Ok(());
     }
 
+    let documents = cx.editor.session()?.documents().values().cloned().collect();
     cx.jobs.callback(async move {
         let call: job::Callback = Callback::EditorCompositor(Box::new(
             |editor: &mut Editor, compositor: &mut Compositor| {
-                session_file_picker(editor, compositor)
+                session_file_picker(editor, compositor, documents)
             },
         ));
         Ok(call)
@@ -3060,7 +3058,7 @@ fn session_close(
         return Ok(());
     }
 
-    cx.editor.with_session(|session| session.shutdown());
+    cx.editor.leave_session()?;
     cx.editor.set_status("closed session");
     Ok(())
 }

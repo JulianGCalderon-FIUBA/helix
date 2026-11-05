@@ -5,9 +5,10 @@ use iroh::SecretKey;
 
 use super::*;
 
+const SESSION: TopicId = TopicId::from_bytes([1; 32]);
+
 struct PeerTransport {
     id: EndpointId,
-    in_session: bool,
     topics: HashSet<TopicId>,
 }
 
@@ -20,18 +21,13 @@ impl PeerTransport {
             Transmit::Unsubscribe(topic) => {
                 self.topics.remove(&topic);
             }
-            Transmit::Shutdown => {
-                self.in_session = false;
-                self.topics.clear();
-            }
             Transmit::Send(..) => unreachable!("the network delivers sends"),
         }
     }
 
     fn listens(&self, channel: Channel) -> bool {
         match channel {
-            Channel::Session => self.in_session,
-            Channel::Document(topic) => self.topics.contains(&topic),
+            Channel::Topic(topic) => self.topics.contains(&topic),
             Channel::Peer(id) => self.id == id,
         }
     }
@@ -90,19 +86,30 @@ struct Network {
 impl Network {
     fn join(&mut self) -> EndpointId {
         let id = SecretKey::generate().public();
-        let mut session = Session::new(id, rand::random());
-        session.join();
+        let session = Session::join(id, SESSION, rand::random());
         self.peers.push(Peer {
             session,
             transport: PeerTransport {
                 id,
-                in_session: true,
-                topics: HashSet::new(),
+                topics: HashSet::from([SESSION]),
             },
             buffers: HashMap::new(),
             unshared: Vec::new(),
         });
         id
+    }
+
+    /// Removes the peer and delivers the messages it sends while leaving.
+    fn leave(&mut self, id: EndpointId) {
+        let index = self
+            .peers
+            .iter()
+            .position(|peer| peer.transport.id == id)
+            .expect("peer should have joined");
+        let peer = self.peers.remove(index);
+        for transmit in peer.session.leave() {
+            self.deliver(id, transmit);
+        }
     }
 
     fn peer(&mut self, id: EndpointId) -> &mut Peer {
@@ -358,33 +365,14 @@ fn losing_a_document_swarm_unshares_it() {
 
     net.peer(guest)
         .session
-        .transport_exit(Channel::Document(id.topic()));
+        .transport_exit(Channel::Topic(id.topic()));
     net.flush();
 
     assert_eq!(net.peer(guest).unshared, [(id, "lost connection".into())]);
 }
 
 #[test]
-fn losing_the_session_unshares_everything() {
-    let mut net = Network::default();
-    let owner = net.join();
-    let guest = net.join();
-    let owned = net.peer(guest).share("mine");
-    let opened = net.peer(owner).share("theirs");
-    net.flush();
-    net.peer(guest).open(opened);
-    net.flush();
-
-    net.peer(guest).session.transport_exit(Channel::Session);
-    net.flush();
-
-    let unshared: HashSet<_> = net.peer(guest).unshared.iter().map(|(id, _)| *id).collect();
-    assert_eq!(unshared, HashSet::from([owned, opened]));
-    assert!(net.peer(guest).session.documents().is_empty());
-}
-
-#[test]
-fn shutdown_unshares_owned_documents() {
+fn leaving_unshares_owned_documents() {
     let mut net = Network::default();
     let owner = net.join();
     let guest = net.join();
@@ -393,10 +381,9 @@ fn shutdown_unshares_owned_documents() {
     net.peer(guest).open(id);
     net.flush();
 
-    net.peer(owner).session.shutdown();
+    net.leave(owner);
     net.flush();
 
-    assert_eq!(net.peer(owner).unshared, [(id, "closed session".into())]);
     assert_eq!(net.peer(guest).unshared, [(id, "owner unshared".into())]);
     assert!(net.peer(guest).session.documents().is_empty());
 }
@@ -412,8 +399,8 @@ fn malformed_messages_are_dropped() {
     net.flush();
 
     for channel in [
-        Channel::Session,
-        Channel::Document(id.topic()),
+        Channel::Topic(SESSION),
+        Channel::Topic(id.topic()),
         Channel::Peer(owner),
     ] {
         net.peer(guest).session.receive(channel, b"garbage");
@@ -440,19 +427,4 @@ fn opening_into_a_new_buffer_fetches_the_owner_text() {
     net.flush();
 
     assert_eq!(net.peer(guest).text(id), "hello");
-}
-
-#[test]
-#[ignore = "#69"]
-fn leaving_ignores_announcements_already_on_their_way() {
-    let mut net = Network::default();
-    let owner = net.join();
-    let guest = net.join();
-
-    // The guest leaves before the announcement reaches it.
-    net.peer(owner).share("hello");
-    net.peer(guest).session.shutdown();
-    net.flush();
-
-    assert!(net.peer(guest).session.documents().is_empty());
 }

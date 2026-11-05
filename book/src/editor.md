@@ -24,6 +24,7 @@
 - [`[editor.inline-diagnostics]` Section](#editorinline-diagnostics-section)
 - [`[editor.word-completion]` Section](#editorword-completion-section)
 - [`[editor.workspace-trust]` Section](#editorworkspace-trust-section)
+- [`[editor.p2p]` Section](#editorp2p-section)
 
 ### `[editor]` Section
 
@@ -566,3 +567,11 @@ level = "servers"
 # under a matching path. `~` and environment variables are expanded.
 trusted = ["~/src/github.com/me/*"]
 ```
+
+### `[editor.p2p]` Section
+
+Controls p2p module.
+
+| Key      | Description                                                              | Default |
+| ---      | ---                                                                      | ---     |
+| `enable` | Enable p2p module                                                        | `true`  |

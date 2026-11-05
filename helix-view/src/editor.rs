@@ -435,6 +435,20 @@ pub struct Config {
     pub buffer_picker: BufferPickerConfig,
     /// Workspace-trust configuration.
     pub workspace_trust: WorkspaceTrustConfig,
+    pub p2p: P2pConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct P2pConfig {
+    /// Only read at startup.
+    pub enable: bool,
+}
+
+impl Default for P2pConfig {
+    fn default() -> Self {
+        Self { enable: true }
+    }
 }
 
 /// User-facing configuration for `[editor.workspace-trust]`.
@@ -1241,6 +1255,7 @@ impl Default for Config {
             kitty_keyboard_protocol: Default::default(),
             buffer_picker: BufferPickerConfig::default(),
             workspace_trust: WorkspaceTrustConfig::default(),
+            p2p: P2pConfig::default(),
         }
     }
 }
@@ -1344,7 +1359,7 @@ pub struct Editor {
     pub mouse_down_range: Option<Range>,
     pub cursor_cache: CursorCache,
     pub workspace_trust: WorkspaceTrust,
-    pub p2p: p2p::P2p,
+    pub p2p: Option<p2p::P2p>,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1355,7 +1370,7 @@ pub enum EditorEvent {
     ConfigEvent(ConfigEvent),
     LanguageServerMessage((LanguageServerId, Call)),
     DebuggerEvent((DebugAdapterId, dap::Payload)),
-    P2pEvent(helix_p2p::net::Event),
+    P2pEvent(p2p::P2pEvent),
     IdleTimer,
     Redraw,
 }
@@ -1471,7 +1486,7 @@ impl Editor {
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
             workspace_trust,
-            p2p: p2p::P2p::new(),
+            p2p: conf.p2p.enable.then(p2p::P2p::new),
         }
     }
 
@@ -2490,11 +2505,7 @@ impl Editor {
                 Some(event) = self.debug_adapters.incoming.next() => {
                     return EditorEvent::DebuggerEvent(event)
                 }
-                Some(event) = self.p2p.local_events.recv() => {
-                    self.p2p.local_event(event);
-                    self.drain_session_queue();
-                }
-                Some(event) = self.p2p.incoming.next() => {
+                Some(event) = async { Some(self.p2p.as_mut()?.next_event().await) } => {
                     return EditorEvent::P2pEvent(event)
                 }
 
