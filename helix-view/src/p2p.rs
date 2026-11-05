@@ -19,8 +19,8 @@ use crate::{
     Document, DocumentId, Editor,
 };
 
-/// What happened to a shared buffer locally. The `DocumentDidChange` hook
-/// can't reach the session, so it queues these.
+/// What happened to a shared buffer locally. The document hook can't reach
+/// the session, so it queues these.
 #[derive(Debug)]
 pub enum LocalEvent {
     Change(SharedId, ChangeSet),
