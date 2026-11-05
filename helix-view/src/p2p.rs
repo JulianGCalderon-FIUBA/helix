@@ -56,8 +56,8 @@ impl P2p {
     }
 
     pub(crate) async fn next(&mut self) -> Input {
+        // Local edits come first, so that remote edits apply on top of them.
         tokio::select! {
-            // Local edits come first, so that remote edits apply on top of them.
             biased;
             Some(event) = self.local_events.recv() => Input::Local(event),
             Some(event) = self.incoming.next() => Input::Net(event),
