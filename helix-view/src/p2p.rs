@@ -24,15 +24,6 @@ pub(crate) enum LocalEvent {
     Change(SharedId, ChangeSet),
 }
 
-/// Events that should be handled by the editor.
-pub(crate) enum P2pEvent {
-    /// A local event queued by the hooks because they can't
-    /// reach the session. Must be handled right away.
-    Local(LocalEvent),
-    /// An remote network event.
-    Net(net::Event),
-}
-
 pub struct P2p {
     transport: Service,
     session: Option<Session>,
@@ -59,13 +50,20 @@ impl P2p {
         self.session.as_ref()
     }
 
-    pub(crate) async fn next_event(&mut self) -> P2pEvent {
-        // Local edits come first, so that remote edits apply on top of them.
-        tokio::select! {
-            biased;
-            Some(event) = self.local_events.recv() => P2pEvent::Local(event),
-            Some(event) = self.incoming.next() => P2pEvent::Net(event),
-            else => unreachable!("local event queue closed"),
+    /// Waits for a network event, applying local events meanwhile.
+    pub(crate) async fn next_event(&mut self) -> net::Event {
+        loop {
+            // Local edits come first, so that remote edits apply on top of them.
+            tokio::select! {
+                biased;
+                Some(event) = self.local_events.recv() => {
+                    self.apply_local_event(event);
+                    // Local edits only queue messages, so they don't need the editor.
+                    self.send_transmits();
+                }
+                Some(event) = self.incoming.next() => return event,
+                else => unreachable!("local event queue closed"),
+            }
         }
     }
 
@@ -83,6 +81,12 @@ impl P2p {
         };
         match event {
             LocalEvent::Change(id, changes) => session.local_change(id, &changes),
+        }
+    }
+
+    fn send_transmits(&mut self) {
+        while let Some(transmit) = self.session.as_mut().and_then(Session::poll_transmit) {
+            self.transmit(transmit);
         }
     }
 
@@ -145,21 +149,11 @@ impl Editor {
         Ok(result)
     }
 
-    pub(crate) fn handle_local_event(&mut self, event: LocalEvent) {
-        let Some(p2p) = &mut self.p2p else {
-            return;
-        };
-        p2p.apply_local_event(event);
-        self.drain_session_queue();
-    }
-
     fn drain_session_queue(&mut self) {
         let Some(p2p) = &mut self.p2p else {
             return;
         };
-        while let Some(transmit) = p2p.session.as_mut().and_then(Session::poll_transmit) {
-            p2p.transmit(transmit);
-        }
+        p2p.send_transmits();
         let events: Vec<_> = iter::from_fn(|| p2p.session.as_mut()?.poll_event()).collect();
         for event in events {
             self.apply_session_event(event);

@@ -2505,10 +2505,9 @@ impl Editor {
                 Some(event) = self.debug_adapters.incoming.next() => {
                     return EditorEvent::DebuggerEvent(event)
                 }
-                Some(input) = async { Some(self.p2p.as_mut()?.next_event().await) } => match input {
-                    p2p::P2pEvent::Local(event) => self.handle_local_event(event),
-                    p2p::P2pEvent::Net(event) => return EditorEvent::P2pEvent(event),
-                },
+                Some(event) = async { Some(self.p2p.as_mut()?.next_event().await) } => {
+                    return EditorEvent::P2pEvent(event)
+                }
 
                 _ = helix_event::redraw_requested() => {
                     if  !self.needs_redraw{
