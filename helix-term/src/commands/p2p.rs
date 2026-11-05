@@ -22,6 +22,10 @@ pub fn session_share(cx: &mut Context) {
     run(cx, |editor, _| share(editor));
 }
 
+pub fn session_unshare(cx: &mut Context) {
+    run(cx, |editor, _| unshare(editor));
+}
+
 pub fn session_close(cx: &mut Context) {
     run(cx, |editor, _| close(editor));
 }
@@ -120,6 +124,14 @@ pub(super) fn share(editor: &mut Editor) -> anyhow::Result<()> {
 
     let label = editor.session()?.documents()[&id].label();
     editor.set_status(format!("shared {label}"));
+    Ok(())
+}
+
+pub(super) fn unshare(editor: &mut Editor) -> anyhow::Result<()> {
+    let doc = doc!(editor);
+    let (doc_id, name) = (doc.id(), doc.display_name().into_owned());
+    editor.unshare_document(doc_id)?;
+    editor.set_status(format!("stopped syncing {name}"));
     Ok(())
 }
 

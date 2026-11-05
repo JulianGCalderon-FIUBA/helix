@@ -263,6 +263,14 @@ impl Editor {
         Ok(id)
     }
 
+    /// Stops syncing the document. Peers lose it only if we own it.
+    pub fn unshare_document(&mut self, doc_id: DocumentId) -> Result<()> {
+        let id = doc!(self, &doc_id).shared.context("buffer is not shared")?;
+        self.with_session(|session| session.close(id))?;
+        doc_mut!(self, &doc_id).shared = None;
+        Ok(())
+    }
+
     pub fn open_shared_document(&mut self, id: SharedId, action: Action) -> Result<()> {
         if let Some(doc_id) = self.shared_document(id).map(Document::id) {
             self.switch(doc_id, action);

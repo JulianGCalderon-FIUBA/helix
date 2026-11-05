@@ -103,4 +103,5 @@
 | `:session-new` | Start a collaborative session if there is none, and yank its ticket to the clipboard. |
 | `:session-join` | Join a collaborative session with the given ticket, or the one in the clipboard. |
 | `:session-share` | Share the focused buffer with every peer of the current collaborative session. |
+| `:session-unshare` | Stop syncing the focused buffer. Peers lose it only if you shared it. |
 | `:session-close` | Leave the current collaborative session. |

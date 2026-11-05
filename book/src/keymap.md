@@ -365,6 +365,7 @@ Accessed by typing `Space` + `m` in [normal mode](#normal-mode).
 | `n` | Start a session and yank its ticket to the clipboard            | `session_new`         |
 | `j` | Join the session whose ticket is in the clipboard               | `session_join`        |
 | `s` | Share the focused buffer                                        | `session_share`       |
+| `u` | Stop syncing the focused buffer                                 | `session_unshare`     |
 | `f` | Open picker of the shared buffers                               | `session_file_picker` |
 | `q` | Leave the session                                               | `session_close`       |
 

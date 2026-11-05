@@ -240,6 +240,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
                 "n" => session_new,
                 "j" => session_join,
                 "s" => session_share,
+                "u" => session_unshare,
                 "f" => session_file_picker,
                 "q" => session_close,
             },

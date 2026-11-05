@@ -120,6 +120,7 @@
 | `session_new` | Start a collaborative session and yank its ticket to the clipboard | normal: `` <space>mn ``, select: `` <space>mn `` |
 | `session_join` | Join the collaborative session whose ticket is in the clipboard | normal: `` <space>mj ``, select: `` <space>mj `` |
 | `session_share` | Share the focused buffer with the collaborative session | normal: `` <space>ms ``, select: `` <space>ms `` |
+| `session_unshare` | Stop syncing the focused buffer with the collaborative session | normal: `` <space>mu ``, select: `` <space>mu `` |
 | `session_file_picker` | Open picker of the buffers shared in the collaborative session | normal: `` <space>mf ``, select: `` <space>mf `` |
 | `session_close` | Leave the collaborative session | normal: `` <space>mq ``, select: `` <space>mq `` |
 | `insert_at_line_start` | Insert at start of line | normal: `` I ``, select: `` I `` |

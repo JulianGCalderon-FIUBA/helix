@@ -425,6 +425,7 @@ impl MappableCommand {
         session_new, "Start a collaborative session and yank its ticket to the clipboard",
         session_join, "Join the collaborative session whose ticket is in the clipboard",
         session_share, "Share the focused buffer with the collaborative session",
+        session_unshare, "Stop syncing the focused buffer with the collaborative session",
         session_file_picker, "Open picker of the buffers shared in the collaborative session",
         session_close, "Leave the collaborative session",
         insert_at_line_start, "Insert at start of line",
