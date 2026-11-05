@@ -11,27 +11,39 @@ use crate::{
 use super::{Context, PathStyleConfig};
 
 pub fn session_new(cx: &mut Context) {
-    run(cx, new_session);
+    if let Err(err) = new_session(cx.editor, cx.jobs) {
+        cx.editor.set_error(err.to_string());
+    }
 }
 
 pub fn session_join(cx: &mut Context) {
-    run(cx, |editor, jobs| join_session(editor, jobs, None));
+    if let Err(err) = join_session(cx.editor, cx.jobs, None) {
+        cx.editor.set_error(err.to_string());
+    }
 }
 
 pub fn session_share(cx: &mut Context) {
-    run(cx, |editor, _| share(editor));
+    if let Err(err) = share(cx.editor) {
+        cx.editor.set_error(err.to_string());
+    }
 }
 
 pub fn session_unshare(cx: &mut Context) {
-    run(cx, |editor, _| unshare(editor));
+    if let Err(err) = unshare(cx.editor) {
+        cx.editor.set_error(err.to_string());
+    }
 }
 
 pub fn session_info(cx: &mut Context) {
-    run(cx, |editor, _| info(editor));
+    if let Err(err) = info(cx.editor) {
+        cx.editor.set_error(err.to_string());
+    }
 }
 
 pub fn session_close(cx: &mut Context) {
-    run(cx, |editor, _| close(editor));
+    if let Err(err) = close(cx.editor) {
+        cx.editor.set_error(err.to_string());
+    }
 }
 
 /// Opens a picker of every buffer shared in the session.
@@ -197,10 +209,4 @@ pub(super) fn close(editor: &mut Editor) -> anyhow::Result<()> {
     editor.leave_session()?;
     editor.set_status("closed session");
     Ok(())
-}
-
-fn run(cx: &mut Context, f: impl FnOnce(&mut Editor, &mut Jobs) -> anyhow::Result<()>) {
-    if let Err(err) = f(cx.editor, cx.jobs) {
-        cx.editor.set_error(err.to_string());
-    }
 }
