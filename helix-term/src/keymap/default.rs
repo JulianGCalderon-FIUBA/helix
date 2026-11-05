@@ -242,6 +242,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
                 "s" => session_share,
                 "u" => session_unshare,
                 "f" => session_file_picker,
+                "p" => session_peer_picker,
                 "i" => session_info,
                 "q" => session_close,
             },

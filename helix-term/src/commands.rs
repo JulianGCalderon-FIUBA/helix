@@ -427,6 +427,7 @@ impl MappableCommand {
         session_share, "Share the focused buffer with the collaborative session",
         session_unshare, "Stop syncing the focused buffer with the collaborative session",
         session_file_picker, "Open picker of the buffers shared in the collaborative session",
+        session_peer_picker, "Open picker of the peers in the collaborative session",
         session_info, "Show the status of the collaborative session",
         session_close, "Leave the collaborative session",
         insert_at_line_start, "Insert at start of line",

@@ -367,6 +367,7 @@ Accessed by typing `Space` + `m` in [normal mode](#normal-mode).
 | `s` | Share the focused buffer                                        | `session_share`       |
 | `u` | Stop syncing the focused buffer                                 | `session_unshare`     |
 | `f` | Open picker of the shared buffers                               | `session_file_picker` |
+| `p` | Open picker of the peers                                        | `session_peer_picker` |
 | `i` | Show the status of the session                                  | `session_info`        |
 | `q` | Leave the session                                               | `session_close`       |
 

@@ -1,5 +1,5 @@
 use anyhow::Context as _;
-use helix_p2p::session::SharedMeta;
+use helix_p2p::{net::EndpointId, session::SharedMeta};
 use helix_view::{doc, Editor};
 
 use crate::{
@@ -73,6 +73,35 @@ pub fn session_file_picker(cx: &mut Context) {
         });
         Some((doc.id().into(), lines))
     });
+    cx.push_layer(Box::new(overlaid(picker)));
+}
+
+/// Opens a picker of the other peers in the session.
+pub fn session_peer_picker(cx: &mut Context) {
+    let items: Vec<(EndpointId, usize)> = match cx.editor.session() {
+        Ok(session) => session
+            .peers()
+            .iter()
+            .map(|&peer| {
+                let documents = session.documents().values();
+                (peer, documents.filter(|meta| meta.owner == peer).count())
+            })
+            .collect(),
+        Err(err) => return cx.editor.set_error(err.to_string()),
+    };
+
+    // TODO: show peer names (#50).
+    let columns = [
+        PickerColumn::new("peer", |(peer, _): &(EndpointId, usize), _| {
+            peer.fmt_short().to_string().into()
+        }),
+        PickerColumn::new("shared", |(_, shared): &(EndpointId, usize), _| {
+            shared.to_string().into()
+        }),
+    ];
+
+    // TODO: jump to the peer when picked (#51).
+    let picker = Picker::new(columns, 0, items, (), |_, _, _| {});
     cx.push_layer(Box::new(overlaid(picker)));
 }
 
