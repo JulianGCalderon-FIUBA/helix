@@ -71,6 +71,9 @@ impl Peer {
                     let buffer = self.buffers.get_mut(&id).unwrap();
                     Transaction::change(buffer, changes.into_iter()).apply(buffer);
                 }
+                Event::Opened { id, text } => {
+                    self.buffers.insert(id, Rope::from(text));
+                }
                 Event::Unshared { id, reason } => self.unshared.push((id, reason)),
             }
         }
@@ -412,7 +415,6 @@ fn malformed_messages_are_dropped() {
 }
 
 #[test]
-#[ignore = "#65"]
 fn opening_into_a_new_buffer_fetches_the_owner_text() {
     let mut net = Network::default();
     let owner = net.join();
