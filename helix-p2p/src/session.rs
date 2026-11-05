@@ -407,12 +407,10 @@ impl Session {
         self.topic
     }
 
-    /// Everyone else in the session, by name.
     pub fn peers(&self) -> &HashMap<EndpointId, String> {
         &self.peers
     }
 
-    /// The name of any peer, or its short id until it says hello.
     pub fn name(&self, peer: EndpointId) -> String {
         if peer == self.me {
             return self.name.clone();
