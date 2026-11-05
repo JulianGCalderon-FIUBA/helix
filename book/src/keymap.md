@@ -301,6 +301,7 @@ This layer is a kludge of mappings, mostly pickers.
 | `j`     | Open jumplist picker                                                    | `jumplist_picker`                          |
 | `g`     | Open changed file picker                                                | `changed_file_picker`                      |
 | `G`     | Debug (experimental)                                                    | N/A                                        |
+| `m`     | Enter [session mode](#session-mode)                                     | N/A                                        |
 | `k`     | Show documentation for item under cursor in a [popup](#popup) (**LSP**) | `hover`                                    |
 | `s`     | Open document symbol picker (**LSP** or **TS**)                         | `lsp_or_syntax_symbol_picker`              |
 | `S`     | Open workspace symbol picker (**LSP** or **TS**)                        | `lsp_or_syntax_workspace_symbol_picker`    |
@@ -354,6 +355,18 @@ Displays the signature of the selected completion item. Remapping currently not 
 | ----    | -----------        |
 | `Alt-p` | Previous signature |
 | `Alt-n` | Next signature     |
+
+##### Session mode
+
+Accessed by typing `Space` + `m` in [normal mode](#normal-mode).
+
+| Key | Description                                                     | Command               |
+| --- | -----------                                                     | -------               |
+| `n` | Start a session and yank its ticket to the clipboard            | `session_new`         |
+| `j` | Join the session whose ticket is in the clipboard               | `session_join`        |
+| `s` | Share the focused buffer                                        | `session_share`       |
+| `f` | Open picker of the shared buffers                               | `session_file_picker` |
+| `q` | Leave the session                                               | `session_close`       |
 
 #### Unimpaired
 

@@ -117,6 +117,11 @@
 | `diagnostics_picker` | Open diagnostic picker | normal: `` <space>d ``, select: `` <space>d `` |
 | `workspace_diagnostics_picker` | Open workspace diagnostic picker | normal: `` <space>D ``, select: `` <space>D `` |
 | `last_picker` | Open last picker | normal: `` <space>' ``, select: `` <space>' `` |
+| `session_new` | Start a collaborative session and yank its ticket to the clipboard | normal: `` <space>mn ``, select: `` <space>mn `` |
+| `session_join` | Join the collaborative session whose ticket is in the clipboard | normal: `` <space>mj ``, select: `` <space>mj `` |
+| `session_share` | Share the focused buffer with the collaborative session | normal: `` <space>ms ``, select: `` <space>ms `` |
+| `session_file_picker` | Open picker of the buffers shared in the collaborative session | normal: `` <space>mf ``, select: `` <space>mf `` |
+| `session_close` | Leave the collaborative session | normal: `` <space>mq ``, select: `` <space>mq `` |
 | `insert_at_line_start` | Insert at start of line | normal: `` I ``, select: `` I `` |
 | `insert_at_line_end` | Insert at end of line | normal: `` A ``, select: `` A `` |
 | `open_below` | Open new line below selection | normal: `` o ``, select: `` o `` |

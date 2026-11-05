@@ -1,5 +1,6 @@
 pub(crate) mod dap;
 pub(crate) mod lsp;
+pub(crate) mod p2p;
 pub(crate) mod syntax;
 pub(crate) mod typed;
 
@@ -12,6 +13,7 @@ use helix_stdx::{
 };
 use helix_vcs::{FileChange, Hunk};
 pub use lsp::*;
+pub use p2p::*;
 pub use syntax::*;
 use tui::{
     text::{Span, Spans},
@@ -44,7 +46,6 @@ use helix_core::{
     visual_offset_from_block, Deletion, LineEnding, Position, Range, Rope, RopeReader, RopeSlice,
     Selection, SmallVec, Syntax, Tendril, Transaction,
 };
-use helix_p2p::session::SharedMeta;
 use helix_view::{
     document::{FormatterError, Mode, SCRATCH_BUFFER_NAME},
     editor::{Action, Motion},
@@ -421,6 +422,11 @@ impl MappableCommand {
         diagnostics_picker, "Open diagnostic picker",
         workspace_diagnostics_picker, "Open workspace diagnostic picker",
         last_picker, "Open last picker",
+        session_new, "Start a collaborative session and yank its ticket to the clipboard",
+        session_join, "Join the collaborative session whose ticket is in the clipboard",
+        session_share, "Share the focused buffer with the collaborative session",
+        session_file_picker, "Open picker of the buffers shared in the collaborative session",
+        session_close, "Leave the collaborative session",
         insert_at_line_start, "Insert at start of line",
         insert_at_line_end, "Insert at end of line",
         open_below, "Open new line below selection",
@@ -3395,43 +3401,6 @@ fn buffer_picker(cx: &mut Context) {
         Some((meta.id.into(), lines))
     });
     cx.push_layer(Box::new(overlaid(picker)));
-}
-
-/// Opens a picker of every buffer shared in the collaborative session
-fn session_file_picker(editor: &Editor, compositor: &mut Compositor, items: Vec<SharedMeta>) {
-    let columns = [
-        PickerColumn::new("owner", |meta: &SharedMeta, _| {
-            meta.owner.fmt_short().to_string().into()
-        }),
-        PickerColumn::new("path", |meta: &SharedMeta, config: &PathStyleConfig| {
-            config.stylize(meta.path.as_deref(), None)
-        }),
-        PickerColumn::new("id", |meta: &SharedMeta, _| {
-            meta.id.fmt_short().to_string().into()
-        }),
-    ];
-
-    let picker = Picker::new(
-        columns,
-        1,
-        items,
-        PathStyleConfig::new(&editor.theme),
-        |cx, meta, action| {
-            if let Err(err) = cx.editor.open_shared_document(meta.id, action) {
-                cx.editor.set_error(err.to_string());
-            }
-        },
-    )
-    .with_preview(|editor, meta| {
-        // Only buffers we subscribed to have preview.
-        let doc = editor.shared_document(meta.id)?;
-        let lines = doc.selections().values().next().map(|selection| {
-            let cursor_line = selection.primary().cursor_line(doc.text().slice(..));
-            (cursor_line, cursor_line)
-        });
-        Some((doc.id().into(), lines))
-    });
-    compositor.push(Box::new(overlaid(picker)));
 }
 
 fn jumplist_picker(cx: &mut Context) {

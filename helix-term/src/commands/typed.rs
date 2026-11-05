@@ -2962,7 +2962,7 @@ fn noop(_cx: &mut compositor::Context, _args: Args, _event: PromptEvent) -> anyh
     Ok(())
 }
 
-fn session_ticket(
+fn session_new(
     cx: &mut compositor::Context,
     _args: Args,
     event: PromptEvent,
@@ -2970,22 +2970,7 @@ fn session_ticket(
     if event != PromptEvent::Validate {
         return Ok(());
     }
-
-    let ticket = cx.editor.session_ticket()?;
-    cx.jobs.callback(async move {
-        let ticket = ticket.await;
-        Ok(job::Callback::EditorCompositor(Box::new(
-            move |editor: &mut Editor, _: &mut Compositor| {
-                let register = '+';
-                match editor.registers.write(register, vec![ticket]) {
-                    Ok(_) => editor.set_status(format!("yanked ticket to register {register}")),
-                    Err(err) => editor.set_error(err.to_string()),
-                }
-            },
-        )))
-    });
-
-    Ok(())
+    p2p::new_session(cx.editor, cx.jobs)
 }
 
 fn session_join(
@@ -2996,19 +2981,7 @@ fn session_join(
     if event != PromptEvent::Validate {
         return Ok(());
     }
-
-    let joined = cx.editor.join_session(&args[0])?;
-    cx.editor.set_status("joining session");
-    cx.jobs.callback(async move {
-        let result = joined.await;
-        Ok(job::Callback::Editor(Box::new(
-            move |editor: &mut Editor| match result {
-                Ok(()) => editor.set_status("joined session"),
-                Err(err) => editor.set_error(format!("failed to join session: {err:#}")),
-            },
-        )))
-    });
-    Ok(())
+    p2p::join_session(cx.editor, cx.jobs, args.first())
 }
 
 fn session_share(
@@ -3019,34 +2992,7 @@ fn session_share(
     if event != PromptEvent::Validate {
         return Ok(());
     }
-
-    let doc_id = doc!(cx.editor).id();
-    let id = cx.editor.share_document(doc_id)?;
-
-    let label = cx.editor.session()?.documents()[&id].label();
-    cx.editor.set_status(format!("shared {label}"));
-    Ok(())
-}
-
-fn session_files(
-    cx: &mut compositor::Context,
-    _args: Args,
-    event: PromptEvent,
-) -> anyhow::Result<()> {
-    if event != PromptEvent::Validate {
-        return Ok(());
-    }
-
-    let documents = cx.editor.session()?.documents().values().cloned().collect();
-    cx.jobs.callback(async move {
-        let call: job::Callback = Callback::EditorCompositor(Box::new(
-            |editor: &mut Editor, compositor: &mut Compositor| {
-                session_file_picker(editor, compositor, documents)
-            },
-        ));
-        Ok(call)
-    });
-    Ok(())
+    p2p::share(cx.editor)
 }
 
 fn session_close(
@@ -3057,10 +3003,7 @@ fn session_close(
     if event != PromptEvent::Validate {
         return Ok(());
     }
-
-    cx.editor.leave_session()?;
-    cx.editor.set_status("closed session");
-    Ok(())
+    p2p::close(cx.editor)
 }
 
 /// This command accepts a single boolean --skip-visible flag and no positionals.
@@ -4211,10 +4154,10 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         signature: Signature { positionals: (0, None), ..Signature::DEFAULT },
     },
     TypableCommand {
-        name: "session-ticket",
+        name: "session-new",
         aliases: &[],
-        doc: "Create a ticket for the collaborative session and yank it into system clipboard.",
-        fun: session_ticket,
+        doc: "Start a collaborative session if there is none, and yank its ticket to the clipboard.",
+        fun: session_new,
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),
@@ -4224,30 +4167,19 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-join",
         aliases: &[],
-        doc: "Join a collaborative session with the given ticket.",
+        doc: "Join a collaborative session with the given ticket, or the one in the clipboard.",
         fun: session_join,
         completer: CommandCompleter::none(),
         signature: Signature {
-            positionals: (1, Some(1)),
+            positionals: (0, Some(1)),
             ..Signature::DEFAULT
         },
     },
     TypableCommand {
         name: "session-share",
         aliases: &[],
-        doc: "Share the focused document with every peer of the current collaborative session.",
+        doc: "Share the focused buffer with every peer of the current collaborative session.",
         fun: session_share,
-        completer: CommandCompleter::none(),
-        signature: Signature {
-            positionals: (0, Some(0)),
-            ..Signature::DEFAULT
-        },
-    },
-    TypableCommand {
-        name: "session-files",
-        aliases: &[],
-        doc: "Open a picker of the buffers shared in the current collaborative session.",
-        fun: session_files,
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),
