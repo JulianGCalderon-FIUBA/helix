@@ -4211,7 +4211,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-unshare",
         aliases: &[],
-        doc: "Stop syncing the focused buffer, unsharing it if you own it.",
+        doc: "Stop syncing the focused buffer.",
         fun: session_unshare,
         completer: CommandCompleter::none(),
         signature: Signature {
