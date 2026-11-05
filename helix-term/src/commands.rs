@@ -3398,9 +3398,7 @@ fn buffer_picker(cx: &mut Context) {
 }
 
 /// Opens a picker of every buffer shared in the collaborative session
-fn session_file_picker(editor: &Editor, compositor: &mut Compositor) {
-    let items = editor.p2p.documents().values().cloned().collect::<Vec<_>>();
-
+fn session_file_picker(editor: &Editor, compositor: &mut Compositor, items: Vec<SharedMeta>) {
     let columns = [
         PickerColumn::new("owner", |meta: &SharedMeta, _| {
             meta.owner.fmt_short().to_string().into()

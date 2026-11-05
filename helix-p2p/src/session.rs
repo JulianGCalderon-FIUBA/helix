@@ -50,11 +50,14 @@ pub enum Transmit {
     Subscribe(TopicId, Vec<EndpointId>),
     Unsubscribe(TopicId),
     Send(Channel, Bytes),
-    Shutdown,
 }
 
+/// One collaborative session. Leaving it drops it, so a new session never
+/// sees the state of an old one.
 pub struct Session {
     me: EndpointId,
+    /// The swarm that every member is in.
+    topic: TopicId,
     rng: StdRng,
     documents: HashMap<SharedId, SharedMeta>,
     replicas: HashMap<SharedId, Replica>,
@@ -65,25 +68,34 @@ pub struct Session {
 }
 
 impl Session {
-    /// A new session with no peers
-    pub fn new(me: EndpointId, seed: u64) -> Self {
+    /// A new session with no peers.
+    pub fn create(me: EndpointId, seed: u64) -> Self {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let topic = TopicId::from_bytes(rng.random());
+        log::info!("created session {}", topic.fmt_short());
+        Self::new(me, topic, rng)
+    }
+
+    /// Joins someone else's session. We know nothing about it yet, so we
+    /// ask for its documents.
+    pub fn join(me: EndpointId, topic: TopicId, seed: u64) -> Self {
+        let mut session = Self::new(me, topic, StdRng::seed_from_u64(seed));
+        let nonce = session.rng.random();
+        session.send(Channel::Session, &GossipMessage::DocumentsRequest { nonce });
+        session
+    }
+
+    fn new(me: EndpointId, topic: TopicId, rng: StdRng) -> Self {
         Self {
             me,
-            rng: StdRng::seed_from_u64(seed),
+            topic,
+            rng,
             documents: HashMap::new(),
             replicas: HashMap::new(),
             pending: HashMap::new(),
             events: VecDeque::new(),
             transmits: VecDeque::new(),
         }
-    }
-
-    /// We have just joined a session. Documents we shared before stay
-    /// shared, so we announce them, since nobody there knows about them.
-    pub fn join(&mut self) {
-        let nonce = self.rng.random();
-        self.send(Channel::Session, &GossipMessage::DocumentsRequest { nonce });
-        self.announce_owned();
     }
 
     pub fn share(&mut self, path: Option<PathBuf>, text: &Rope) -> SharedId {
@@ -143,7 +155,8 @@ impl Session {
 
     pub fn transport_exit(&mut self, channel: Channel) {
         match channel {
-            Channel::Session => self.exit(),
+            // The driver drops the session when it loses it.
+            Channel::Session => {}
             Channel::Document(topic) => {
                 let id = SharedId::from(topic);
                 if self.unsync(id) {
@@ -172,29 +185,20 @@ impl Session {
         }
     }
 
-    pub fn shutdown(&mut self) {
-        let ids: Vec<_> = self.replicas.keys().copied().collect();
-        for id in ids {
-            self.unsync(id);
-            self.events.push_back(Event::Unshared {
-                id,
-                reason: "closed session".to_string(),
-            });
+    /// Tells the others that our documents are gone. The driver must send
+    /// these before leaving the session's swarm.
+    pub fn leave(mut self) -> impl Iterator<Item = Transmit> {
+        let owned: Vec<_> = self
+            .documents
+            .values()
+            .filter(|meta| meta.owner == self.me)
+            .map(|meta| meta.id)
+            .collect();
+        for id in owned {
+            log::info!("unsharing {}", id.fmt_short());
+            self.send(Channel::Session, &GossipMessage::Unshare { id });
         }
-        self.documents.clear();
-        self.pending.clear();
-        self.transmits.push_back(Transmit::Shutdown);
-    }
-
-    fn exit(&mut self) {
-        for (id, _) in self.replicas.drain() {
-            self.events.push_back(Event::Unshared {
-                id,
-                reason: "lost session".to_string(),
-            });
-        }
-        self.documents.clear();
-        self.pending.clear();
+        self.transmits.into_iter()
     }
 
     /// Receive data from the network layer
@@ -354,6 +358,10 @@ impl Session {
 
     pub fn poll_transmit(&mut self) -> Option<Transmit> {
         self.transmits.pop_front()
+    }
+
+    pub fn topic(&self) -> TopicId {
+        self.topic
     }
 
     pub fn documents(&self) -> &HashMap<SharedId, SharedMeta> {

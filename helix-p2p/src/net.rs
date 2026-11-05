@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, fmt, future::Future};
 
-use anyhow::{ensure, Result};
+use anyhow::Result;
 use bytes::Bytes;
 pub use iroh::EndpointId;
 use iroh::{
@@ -16,7 +16,8 @@ use iroh_gossip::{
     api::{ApiError, Event as GossipEvent, GossipSender, GossipTopic},
     Gossip, ALPN,
 };
-use iroh_tickets::{ParseError, Ticket};
+use iroh_tickets::ParseError;
+pub use iroh_tickets::Ticket;
 use n0_future::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{
@@ -60,12 +61,12 @@ pub enum Event {
 /// What the editor asks to the service.
 #[derive(Debug)]
 enum Request {
-    Ticket(oneshot::Sender<String>),
-    Join(String, oneshot::Sender<Result<()>>),
+    Addr(oneshot::Sender<EndpointAddr>),
+    Join(TopicId, Option<EndpointAddr>, oneshot::Sender<Result<()>>),
     Subscribe(TopicId, Vec<EndpointId>),
     Unsubscribe(TopicId),
     Send(Channel, Bytes),
-    Shutdown,
+    Leave,
 }
 
 #[derive(Clone)]
@@ -100,20 +101,32 @@ impl Service {
         self.id
     }
 
-    pub fn ticket(&self) -> impl Future<Output = String> + 'static {
+    /// How peers can reach us. It changes as we learn about the network,
+    /// so the actor is asked every time.
+    pub fn addr(&self) -> impl Future<Output = EndpointAddr> + 'static {
         let (tx, rx) = oneshot::channel();
-        self.request(Request::Ticket(tx));
+        self.request(Request::Addr(tx));
         async move { rx.await.expect("actor should reply") }
     }
 
-    pub fn join(&self, ticket: String) -> impl Future<Output = Result<()>> + 'static {
+    /// Subscribes to the session's swarm. Without a bootstrap peer, we are
+    /// the first one in it.
+    ///
+    /// The request is sent right away, so the future can be dropped. Later
+    /// requests are handled after joining.
+    pub fn join(
+        &self,
+        topic: TopicId,
+        bootstrap: Option<EndpointAddr>,
+    ) -> impl Future<Output = Result<()>> + 'static {
         let (tx, rx) = oneshot::channel();
-        self.request(Request::Join(ticket, tx));
+        self.request(Request::Join(topic, bootstrap, tx));
         async move { rx.await.expect("actor should reply") }
     }
 
-    pub fn shutdown(&self) {
-        self.request(Request::Shutdown);
+    /// Leaves every swarm and drops every peer connection.
+    pub fn leave(&self) {
+        self.request(Request::Leave);
     }
 
     pub fn subscribe(&self, topic: TopicId, bootstrap: Vec<EndpointId>) {
@@ -164,8 +177,6 @@ struct Actor {
     /// Addresses learned from tickets.
     addresses: MemoryLookup,
     events: UnboundedSender<Event>,
-    /// Current session, if one.
-    session: Option<TopicId>,
     senders: HashMap<Channel, GossipSender>,
     receivers: StreamMap<Channel, Events>,
     /// Connections that peers opened to us.
@@ -210,7 +221,6 @@ impl Actor {
             _router: router,
             addresses,
             events,
-            session: None,
             senders: HashMap::new(),
             receivers: StreamMap::new(),
             incoming,
@@ -240,11 +250,11 @@ impl Actor {
 
     async fn handle(&mut self, request: Request) {
         match request {
-            Request::Ticket(chan) => {
-                let _ = chan.send(self.ticket().await);
+            Request::Addr(chan) => {
+                let _ = chan.send(self.endpoint.addr());
             }
-            Request::Join(ticket, chan) => {
-                let result = self.join(&ticket).await;
+            Request::Join(topic, bootstrap, chan) => {
+                let result = self.join(topic, bootstrap).await;
                 if let Err(err) = &result {
                     log::warn!("failed to join session: {err:#}");
                 }
@@ -262,56 +272,28 @@ impl Actor {
                     log::warn!("failed to broadcast: {err:#}")
                 }
             }
-            Request::Shutdown => self.shutdown(),
+            Request::Leave => self.leave(),
         }
     }
 
-    async fn ticket(&mut self) -> String {
-        let topic = match self.session {
-            Some(topic) => topic,
-            None => {
-                let topic = TopicId::from_bytes(rand::random());
-                let subscription = self
-                    .gossip
-                    .subscribe(topic, Vec::new())
-                    .await
-                    .expect("gossip should be running");
-                self.add_subscription(Channel::Session, subscription);
-                self.session = Some(topic);
-                log::info!("created session {}", topic.fmt_short());
-                topic
+    async fn join(&mut self, topic: TopicId, bootstrap: Option<EndpointAddr>) -> Result<()> {
+        let subscription = match bootstrap {
+            None => self.gossip.subscribe(topic, Vec::new()).await?,
+            Some(addr) => {
+                let bootstrap = addr.id;
+                // The ticket is how we learn where the bootstrap peer is.
+                self.addresses.add_endpoint_info(addr);
+                log::info!(
+                    "joining session {} through {}",
+                    topic.fmt_short(),
+                    bootstrap.fmt_short()
+                );
+                self.gossip
+                    .subscribe_and_join(topic, vec![bootstrap])
+                    .await?
             }
         };
-
-        SessionTicket {
-            topic,
-            addr: self.endpoint.addr(),
-        }
-        .encode_string()
-    }
-
-    async fn join(&mut self, ticket: &str) -> Result<()> {
-        let SessionTicket { topic, addr } = SessionTicket::decode_string(ticket)?;
-
-        ensure!(
-            addr.id != self.endpoint.id(),
-            "cannot join your own session"
-        );
-        ensure!(self.session.is_none(), "already in a session");
-
-        let bootstrap = addr.id;
-        self.addresses.add_endpoint_info(addr);
-        log::info!(
-            "joining session {} through {}",
-            topic.fmt_short(),
-            bootstrap.fmt_short()
-        );
-        let subscription = self
-            .gossip
-            .subscribe_and_join(topic, vec![bootstrap])
-            .await?;
         self.add_subscription(Channel::Session, subscription);
-        self.session = Some(topic);
         Ok(())
     }
 
@@ -386,13 +368,12 @@ impl Actor {
         Ok(())
     }
 
-    fn shutdown(&mut self) {
+    fn leave(&mut self) {
         self.senders.clear();
         self.receivers.clear();
         self.peers.clear();
         self.peer_messages.clear();
-        self.session.take();
-        log::info!("shutdown session");
+        log::info!("left session");
     }
 
     fn on_event(&mut self, channel: Channel, event: Option<Result<GossipEvent, ApiError>>) {
@@ -432,8 +413,8 @@ impl Actor {
     fn exit(&mut self, channel: Channel, reason: String) {
         log::error!("lost {channel}: {reason}");
         match channel {
-            Channel::Session => self.shutdown(),
-            Channel::Document(_) => self.unsubscribe(channel),
+            // The editor decides what losing the session means, and leaves.
+            Channel::Session | Channel::Document(_) => self.unsubscribe(channel),
             Channel::Peer(peer) => self.disconnect(peer),
         }
         let _ = self.events.send(Event::Exit(channel));

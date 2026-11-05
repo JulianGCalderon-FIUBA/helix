@@ -1,13 +1,13 @@
 //! Glue between the editor and the helix-p2p session.
 
-use std::collections::HashMap;
+use std::future::Future;
 
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use helix_core::{ChangeSet, Transaction};
 use helix_event::register_hook;
 use helix_p2p::{
-    net::{self, Service},
-    session::{Event, Session, SharedMeta, Transmit},
+    net::{self, Channel, Service, SessionTicket, Ticket},
+    session::{Event, Session, Transmit},
     wire::SharedId,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -24,9 +24,12 @@ pub(crate) enum LocalEvent {
     Change(SharedId, ChangeSet),
 }
 
+/// Lives as long as the editor. The transport outlives every session, since
+/// our identity and connections belong to the process.
 pub struct P2p {
-    pub service: Service,
-    session: Session,
+    transport: Service,
+    /// Only while in a session.
+    session: Option<Session>,
     pub(crate) incoming: UnboundedReceiverStream<net::Event>,
     /// Local events in shared buffers cannot be applied directly by the hooks.
     local_events_tx: UnboundedSender<LocalEvent>,
@@ -35,46 +38,49 @@ pub struct P2p {
 
 impl P2p {
     pub fn new() -> Self {
-        let (service, incoming) = Service::new();
+        let (transport, incoming) = Service::new();
         let (local_events_tx, local_events) = unbounded_channel();
         Self {
-            session: Session::new(service.id(), rand::random()),
-            service,
+            transport,
+            session: None,
             incoming,
             local_events_tx,
             local_events,
         }
     }
 
-    pub fn session(&mut self) -> &mut Session {
+    pub fn session(&self) -> Option<&Session> {
+        self.session.as_ref()
+    }
+
+    fn session_mut(&mut self) -> Option<&mut Session> {
         // The session must be up to date before taking any more inputs.
         while let Ok(event) = self.local_events.try_recv() {
             self.apply_local_event(event);
         }
-        &mut self.session
+        self.session.as_mut()
     }
 
     pub(crate) fn local_event(&mut self, event: LocalEvent) {
         self.apply_local_event(event);
-        self.session();
+        self.session_mut();
     }
 
     fn apply_local_event(&mut self, event: LocalEvent) {
+        // Edits queued before leaving belong to no session.
+        let Some(session) = &mut self.session else {
+            return;
+        };
         match event {
-            LocalEvent::Change(id, changes) => self.session.local_change(id, &changes),
+            LocalEvent::Change(id, changes) => session.local_change(id, &changes),
         }
-    }
-
-    pub fn documents(&self) -> &HashMap<SharedId, SharedMeta> {
-        self.session.documents()
     }
 
     fn transmit(&self, transmit: Transmit) {
         match transmit {
-            Transmit::Subscribe(topic, bootstrap) => self.service.subscribe(topic, bootstrap),
-            Transmit::Unsubscribe(topic) => self.service.unsubscribe(topic),
-            Transmit::Send(channel, message) => self.service.send(channel, message),
-            Transmit::Shutdown => self.service.shutdown(),
+            Transmit::Subscribe(topic, bootstrap) => self.transport.subscribe(topic, bootstrap),
+            Transmit::Unsubscribe(topic) => self.transport.unsubscribe(topic),
+            Transmit::Send(channel, message) => self.transport.send(channel, message),
         }
     }
 }
@@ -89,7 +95,8 @@ pub fn register_hooks(p2p: &P2p) {
     // Stops syncing closed documents.
     register_hook!(move |event: &mut DocumentDidClose<'_>| {
         if let Some(id) = event.doc.shared {
-            event.editor.with_session(|session| session.close(id));
+            // Shared buffers only exist in a session, so this can't fail.
+            let _ = event.editor.with_session(|session| session.close(id));
         }
         Ok(())
     });
@@ -109,31 +116,98 @@ pub fn register_hooks(p2p: &P2p) {
 }
 
 impl Editor {
+    pub fn session(&self) -> Result<&Session> {
+        self.p2p.session().context("not in a session")
+    }
+
     /// Gives the session as input and afterwards drains the output queue.
-    pub fn with_session<T>(&mut self, f: impl FnOnce(&mut Session) -> T) -> T {
-        let result = f(self.p2p.session());
+    pub fn with_session<T>(&mut self, f: impl FnOnce(&mut Session) -> T) -> Result<T> {
+        let session = self.p2p.session_mut().context("not in a session")?;
+        let result = f(session);
         self.drain_session_queue();
-        result
+        Ok(result)
     }
 
     pub(crate) fn drain_session_queue(&mut self) {
-        while let Some(transmit) = self.p2p.session.poll_transmit() {
+        while let Some(transmit) = self.p2p.session.as_mut().and_then(Session::poll_transmit) {
             self.p2p.transmit(transmit);
         }
-        while let Some(event) = self.p2p.session.poll_event() {
+        while let Some(event) = self.p2p.session.as_mut().and_then(Session::poll_event) {
             self.apply_session_event(event);
         }
     }
 
     pub fn handle_p2p_event(&mut self, event: net::Event) {
+        // Messages that arrive after leaving have no session to go to, so
+        // failing to find one is fine.
         match event {
+            net::Event::Exit(Channel::Session) => {
+                if self.leave_session().is_ok() {
+                    self.set_error("lost connection to the session");
+                }
+            }
             net::Event::Received(channel, message) => {
-                self.with_session(|session| session.receive(channel, &message))
+                let _ = self.with_session(|session| session.receive(channel, &message));
             }
             net::Event::Exit(channel) => {
-                self.with_session(|session| session.transport_exit(channel))
+                let _ = self.with_session(|session| session.transport_exit(channel));
             }
         }
+    }
+
+    /// Creates a session if we aren't in one, and returns an invitation
+    /// into it.
+    pub fn session_ticket(&mut self) -> impl Future<Output = String> + 'static {
+        let p2p = &mut self.p2p;
+        let session = p2p.session.get_or_insert_with(|| {
+            let session = Session::create(p2p.transport.id(), rand::random());
+            // Nobody else is in a new session, so there is nothing to wait for.
+            drop(p2p.transport.join(session.topic(), None));
+            session
+        });
+        let topic = session.topic();
+        let addr = p2p.transport.addr();
+        async move {
+            let addr = addr.await;
+            SessionTicket { topic, addr }.encode_string()
+        }
+    }
+
+    /// Joins the session in the ticket. Returns its topic and a future that
+    /// resolves once we are in it.
+    pub fn join_session(
+        &mut self,
+        ticket: &str,
+    ) -> Result<(net::TopicId, impl Future<Output = Result<()>> + 'static)> {
+        let p2p = &mut self.p2p;
+        ensure!(p2p.session.is_none(), "already in a session");
+        let SessionTicket { topic, addr } = SessionTicket::decode_string(ticket)?;
+        ensure!(
+            addr.id != p2p.transport.id(),
+            "cannot join your own session"
+        );
+
+        // The session exists from now on, so that a second join fails. The
+        // transport handles the session's messages after it has joined.
+        let joined = p2p.transport.join(topic, Some(addr));
+        p2p.session = Some(Session::join(p2p.transport.id(), topic, rand::random()));
+        self.drain_session_queue();
+        Ok((topic, joined))
+    }
+
+    /// Unshares our documents and stops syncing every buffer.
+    pub fn leave_session(&mut self) -> Result<()> {
+        let p2p = &mut self.p2p;
+        let session = p2p.session.take().context("not in a session")?;
+        for transmit in session.leave() {
+            p2p.transmit(transmit);
+        }
+        p2p.transport.leave();
+
+        for doc in self.documents_mut() {
+            doc.shared = None;
+        }
+        Ok(())
     }
 
     pub fn shared_document(&self, id: SharedId) -> Option<&Document> {
@@ -150,7 +224,7 @@ impl Editor {
         });
         let text = doc.text().clone();
 
-        let id = self.with_session(|session| session.share(path, &text));
+        let id = self.with_session(|session| session.share(path, &text))?;
         doc_mut!(self, &doc_id).shared = Some(id);
         Ok(id)
     }
@@ -161,18 +235,14 @@ impl Editor {
             return Ok(());
         }
 
-        self.with_session(|session| session.open(id))?;
+        self.with_session(|session| session.open(id))??;
         let doc_id = self.new_file(action);
         doc_mut!(self, &doc_id).shared = Some(id);
 
-        let meta = &self.p2p.documents()[&id];
+        let meta = &self.session()?.documents()[&id];
         let status = format!("opening {} from {}", meta.label(), meta.owner.fmt_short());
         self.set_status(status);
         Ok(())
-    }
-
-    pub fn join_session(&mut self) {
-        self.with_session(|session| session.join());
     }
 
     fn apply_session_event(&mut self, event: Event) {
