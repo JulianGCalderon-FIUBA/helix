@@ -575,4 +575,4 @@ Controls p2p module.
 | Key      | Description                                                              | Default |
 | ---      | ---                                                                      | ---     |
 | `enable` | Enable p2p module                                                        | `true`  |
-| `name`   | Name that peers see you as in a session                                  | Your short address |
+| `name`   | Your public name                                                         | Address |
