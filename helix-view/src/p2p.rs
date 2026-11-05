@@ -24,8 +24,17 @@ pub(crate) enum LocalEvent {
     Change(SharedId, ChangeSet),
 }
 
+/// The next thing p2p needs the editor for, from [`P2p::next`].
+///
+/// Both queues are merged into one future so that `Editor::wait_event` can
+/// wait on p2p with a single branch, which is disabled when p2p is off.
 pub(crate) enum P2pEvent {
+    /// An edit to a shared buffer, queued by the hooks because they can't
+    /// reach the session. Handle it right away, inside `wait_event`: it only
+    /// updates the session and doesn't need a redraw.
     Local(LocalEvent),
+    /// Something the transport received or lost. Return it to the
+    /// application, which handles it and redraws.
     Net(net::Event),
 }
 
