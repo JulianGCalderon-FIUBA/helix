@@ -101,19 +101,13 @@ impl Service {
         self.id
     }
 
-    /// How peers can reach us. It changes as we learn about the network,
-    /// so the actor is asked every time.
     pub fn addr(&self) -> impl Future<Output = EndpointAddr> + 'static {
         let (tx, rx) = oneshot::channel();
         self.request(Request::Addr(tx));
         async move { rx.await.expect("actor should reply") }
     }
 
-    /// Subscribes to the session's swarm. Without a bootstrap peer, we are
-    /// the first one in it.
-    ///
-    /// The request is sent right away, so the future can be dropped. Later
-    /// requests are handled after joining.
+    /// The request is sent right away, so the future can be dropped.
     pub fn join(
         &self,
         topic: TopicId,
@@ -124,7 +118,6 @@ impl Service {
         async move { rx.await.expect("actor should reply") }
     }
 
-    /// Leaves every swarm and drops every peer connection.
     pub fn leave(&self) {
         self.request(Request::Leave);
     }
@@ -281,7 +274,6 @@ impl Actor {
             None => self.gossip.subscribe(topic, Vec::new()).await?,
             Some(addr) => {
                 let bootstrap = addr.id;
-                // The ticket is how we learn where the bootstrap peer is.
                 self.addresses.add_endpoint_info(addr);
                 log::info!(
                     "joining session {} through {}",
@@ -413,7 +405,6 @@ impl Actor {
     fn exit(&mut self, channel: Channel, reason: String) {
         log::error!("lost {channel}: {reason}");
         match channel {
-            // The editor decides what losing the session means, and leaves.
             Channel::Session | Channel::Document(_) => self.unsubscribe(channel),
             Channel::Peer(peer) => self.disconnect(peer),
         }

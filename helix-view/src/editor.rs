@@ -441,7 +441,7 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct P2pConfig {
-    /// Enables collaborative sessions. Only read at startup.
+    /// Only read at startup.
     pub enable: bool,
 }
 
@@ -1359,7 +1359,6 @@ pub struct Editor {
     pub mouse_down_range: Option<Range>,
     pub cursor_cache: CursorCache,
     pub workspace_trust: WorkspaceTrust,
-    /// Only when p2p is enabled.
     pub p2p: Option<p2p::P2p>,
 }
 

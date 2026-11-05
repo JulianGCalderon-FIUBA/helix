@@ -54,7 +54,6 @@ pub enum Transmit {
 
 pub struct Session {
     me: EndpointId,
-    /// The swarm that every member is in.
     topic: TopicId,
     rng: StdRng,
     documents: HashMap<SharedId, SharedMeta>,
@@ -66,7 +65,7 @@ pub struct Session {
 }
 
 impl Session {
-    /// A new session with no peers.
+    /// A new session with no peers
     pub fn create(me: EndpointId, seed: u64) -> Self {
         let mut rng = StdRng::seed_from_u64(seed);
         let topic = TopicId::from_bytes(rng.random());
@@ -74,8 +73,6 @@ impl Session {
         Self::new(me, topic, rng)
     }
 
-    /// Joins someone else's session. We know nothing about it yet, so we
-    /// ask for its documents.
     pub fn join(me: EndpointId, topic: TopicId, seed: u64) -> Self {
         let mut session = Self::new(me, topic, StdRng::seed_from_u64(seed));
         let nonce = session.rng.random();
@@ -183,8 +180,7 @@ impl Session {
         }
     }
 
-    /// Tells the others that our documents are gone. The driver must send
-    /// these before leaving the session's swarm.
+    /// The driver must send these before leaving the session's swarm.
     pub fn leave(mut self) -> impl Iterator<Item = Transmit> {
         let owned: Vec<_> = self
             .documents

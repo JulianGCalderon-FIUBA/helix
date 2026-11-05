@@ -24,17 +24,13 @@ pub(crate) enum LocalEvent {
     Change(SharedId, ChangeSet),
 }
 
-/// Something for the editor to handle.
 pub(crate) enum Input {
     Local(LocalEvent),
     Net(net::Event),
 }
 
-/// Lives as long as the editor while p2p is enabled. The transport outlives
-/// every session, since our identity and connections belong to the process.
 pub struct P2p {
     transport: Service,
-    /// Only while in a session.
     session: Option<Session>,
     incoming: UnboundedReceiverStream<net::Event>,
     /// Local events in shared buffers cannot be applied directly by the hooks.
@@ -65,7 +61,6 @@ impl P2p {
             biased;
             Some(event) = self.local_events.recv() => Input::Local(event),
             Some(event) = self.incoming.next() => Input::Net(event),
-            // We hold a sender, so the local queue stays open.
             else => unreachable!("local event queue closed"),
         }
     }
@@ -79,7 +74,6 @@ impl P2p {
     }
 
     fn apply_local_event(&mut self, event: LocalEvent) {
-        // Edits queued before leaving belong to no session.
         let Some(session) = &mut self.session else {
             return;
         };
@@ -107,7 +101,6 @@ pub fn register_hooks(p2p: &P2p) {
     // Stops syncing closed documents.
     register_hook!(move |event: &mut DocumentDidClose<'_>| {
         if let Some(id) = event.doc.shared {
-            // Shared buffers only exist in a session, so this can't fail.
             let _ = event.editor.with_session(|session| session.close(id));
         }
         Ok(())
@@ -170,8 +163,6 @@ impl Editor {
     }
 
     pub fn handle_p2p_event(&mut self, event: net::Event) {
-        // Messages that arrive after leaving have no session to go to, so
-        // failing to find one is fine.
         match event {
             net::Event::Exit(Channel::Session) => {
                 if self.leave_session().is_ok() {
@@ -187,13 +178,10 @@ impl Editor {
         }
     }
 
-    /// Creates a session if we aren't in one, and returns an invitation
-    /// into it.
     pub fn session_ticket(&mut self) -> Result<impl Future<Output = String> + 'static> {
         let p2p = self.p2p_mut()?;
         let session = p2p.session.get_or_insert_with(|| {
             let session = Session::create(p2p.transport.id(), rand::random());
-            // Nobody else is in a new session, so there is nothing to wait for.
             drop(p2p.transport.join(session.topic(), None));
             session
         });
@@ -205,8 +193,6 @@ impl Editor {
         })
     }
 
-    /// Joins the session in the ticket. Returns its topic and a future that
-    /// resolves once we are in it.
     pub fn join_session(
         &mut self,
         ticket: &str,
@@ -219,15 +205,13 @@ impl Editor {
             "cannot join your own session"
         );
 
-        // The session exists from now on, so that a second join fails. The
-        // transport handles the session's messages after it has joined.
+        // The session exists from now on, so that a second join fails.
         let joined = p2p.transport.join(topic, Some(addr));
         p2p.session = Some(Session::join(p2p.transport.id(), topic, rand::random()));
         self.drain_session_queue();
         Ok((topic, joined))
     }
 
-    /// Unshares our documents and stops syncing every buffer.
     pub fn leave_session(&mut self) -> Result<()> {
         let p2p = self.p2p_mut()?;
         let session = p2p.session.take().context("not in a session")?;
