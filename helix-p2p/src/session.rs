@@ -1,6 +1,5 @@
 //! The collaboration protocol, as a sans-IO state machine.
-//!
-//! It depends on a topic-based network layer.
+//! It relies on the transport layer to communicate with peers.
 
 use std::{
     collections::{HashMap, VecDeque},

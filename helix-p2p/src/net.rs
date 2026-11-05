@@ -1,4 +1,5 @@
-//! The transport layer moves opaque bytes between peers.
+//! A topic based transport layer that moves opaque bytes between peers.
+//! It knows nothing about collaboration.
 
 use std::{collections::HashMap, fmt, future::Future};
 
