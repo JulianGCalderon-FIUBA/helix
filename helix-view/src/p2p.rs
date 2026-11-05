@@ -1,25 +1,4 @@
 //! Glue between the editor and the helix-p2p session.
-//!
-//! # Events
-//!
-//! Local events are edits to shared buffers. The `DocumentDidChange` hook
-//! can't reach the session, so it queues them. They are applied when
-//! `wait_event` returns them as `P2pEvent::Local`, or earlier by
-//! `with_session`, which applies every queued edit before giving the session
-//! any other input. Closing a shared buffer isn't queued: its hook calls
-//! `with_session` directly.
-//!
-//! Network events come from the transport. `wait_event` returns them as
-//! `P2pEvent::Net`, after any queued local edit:
-//! - `Received` goes to the session.
-//! - `Exit` of the session's topic leaves the session. Any other `Exit` goes
-//!   to the session, which stops syncing the documents that depended on it.
-//!
-//! Session events are the session's output. After every input,
-//! `drain_session_queue` sends the session's messages to the transport and
-//! applies its events:
-//! - `Changes` applies remote edits to the buffer.
-//! - `Unshared` stops syncing the buffer.
 
 use std::{future::Future, iter};
 
@@ -40,7 +19,8 @@ use crate::{
     Document, DocumentId, Editor,
 };
 
-/// What happened to a shared buffer locally.
+/// What happened to a shared buffer locally. The `DocumentDidChange` hook
+/// can't reach the session, so it queues these.
 #[derive(Debug)]
 pub enum LocalEvent {
     Change(SharedId, ChangeSet),
@@ -49,7 +29,6 @@ pub enum LocalEvent {
 /// Something p2p needs the editor to handle.
 #[derive(Debug)]
 pub enum P2pEvent {
-    /// Queued by the hooks, because they can't reach the session.
     Local(LocalEvent),
     Net(net::Event),
 }
@@ -58,7 +37,6 @@ pub struct P2p {
     transport: Service,
     session: Option<Session>,
     incoming: UnboundedReceiverStream<net::Event>,
-    /// Local events in shared buffers cannot be applied directly by the hooks.
     local_events_tx: UnboundedSender<LocalEvent>,
     local_events: UnboundedReceiver<LocalEvent>,
 }
@@ -91,7 +69,8 @@ impl P2p {
     }
 
     fn session_mut(&mut self) -> Option<&mut Session> {
-        // The session must be up to date before taking any more inputs.
+        // Queued local edits may not have reached `wait_event` yet, but the
+        // session must be up to date before taking any other input.
         while let Ok(event) = self.local_events.try_recv() {
             self.apply_local_event(event);
         }
@@ -132,7 +111,8 @@ impl Default for P2p {
 }
 
 pub fn register_hooks(p2p: &P2p) {
-    // Stops syncing closed documents.
+    // Stops syncing closed documents. This hook has the editor, so it doesn't
+    // need to queue.
     register_hook!(move |event: &mut DocumentDidClose<'_>| {
         if let Some(id) = event.doc.shared {
             let _ = event.editor.with_session(|session| session.close(id));
@@ -172,6 +152,8 @@ impl Editor {
         Ok(result)
     }
 
+    /// Sends the session's messages and applies its events. Runs after every
+    /// input to the session.
     fn drain_session_queue(&mut self) {
         let Some(p2p) = &mut self.p2p else {
             return;
@@ -200,6 +182,7 @@ impl Editor {
 
     fn handle_p2p_net_event(&mut self, event: net::Event) {
         match event {
+            // Losing the session's topic loses the session.
             net::Event::Exit(Channel::Topic(topic))
                 if self.session().is_ok_and(|session| session.topic() == topic) =>
             {
@@ -209,6 +192,7 @@ impl Editor {
             net::Event::Received(channel, message) => {
                 let _ = self.with_session(|session| session.receive(channel, &message));
             }
+            // The session stops syncing whatever depended on the channel.
             net::Event::Exit(channel) => {
                 let _ = self.with_session(|session| session.transport_exit(channel));
             }
