@@ -43,7 +43,13 @@ pub enum GossipMessage {
     Unshare {
         id: SharedId,
     },
-    DocumentsRequest {
+    Hello {
+        peer: EndpointId,
+        name: String,
+        nonce: u64,
+    },
+    Bye {
+        peer: EndpointId,
         nonce: u64,
     },
     Edit {

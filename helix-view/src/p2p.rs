@@ -196,9 +196,10 @@ impl Editor {
     }
 
     pub fn session_ticket(&mut self) -> Result<impl Future<Output = String> + 'static> {
+        let name = self.config().p2p.name.clone();
         let p2p = self.p2p_mut()?;
         let session = p2p.session.get_or_insert_with(|| {
-            let session = Session::create(p2p.transport.id(), rand::random());
+            let session = Session::create(p2p.transport.id(), name, rand::random());
             drop(p2p.transport.subscribe(session.topic(), Vec::new()));
             session
         });
@@ -214,6 +215,7 @@ impl Editor {
         &mut self,
         ticket: &str,
     ) -> Result<impl Future<Output = Result<()>> + 'static> {
+        let name = self.config().p2p.name.clone();
         let p2p = self.p2p_mut()?;
         ensure!(p2p.session.is_none(), "already in a session");
         let SessionTicket { topic, addr } = SessionTicket::decode_string(ticket)?;
@@ -225,7 +227,8 @@ impl Editor {
         let bootstrap = addr.id;
         p2p.transport.add_address(addr);
         let joined = p2p.transport.subscribe(topic, vec![bootstrap]);
-        p2p.session = Some(Session::join(p2p.transport.id(), topic, rand::random()));
+        let session = Session::join(p2p.transport.id(), name, topic, rand::random());
+        p2p.session = Some(session);
         self.drain_session_queue();
         Ok(joined)
     }
@@ -263,6 +266,13 @@ impl Editor {
         Ok(id)
     }
 
+    pub fn unshare_document(&mut self, doc_id: DocumentId) -> Result<()> {
+        let id = doc!(self, &doc_id).shared.context("buffer is not shared")?;
+        self.with_session(|session| session.close(id))?;
+        doc_mut!(self, &doc_id).shared = None;
+        Ok(())
+    }
+
     pub fn open_shared_document(&mut self, id: SharedId, action: Action) -> Result<()> {
         if let Some(doc_id) = self.shared_document(id).map(Document::id) {
             self.switch(doc_id, action);
@@ -273,8 +283,9 @@ impl Editor {
         let doc_id = self.new_file(action);
         doc_mut!(self, &doc_id).shared = Some(id);
 
-        let meta = &self.session()?.documents()[&id];
-        let status = format!("opening {} from {}", meta.label(), meta.owner.fmt_short());
+        let session = self.session()?;
+        let meta = &session.documents()[&id];
+        let status = format!("opening {} from {}", meta.label(), session.name(meta.owner));
         self.set_status(status);
         Ok(())
     }

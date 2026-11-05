@@ -74,8 +74,11 @@ pub enum Transmit {
 
 pub struct Session {
     me: EndpointId,
+    name: String,
     topic: TopicId,
     rng: StdRng,
+    /// The other peers, by name.
+    peers: HashMap<EndpointId, String>,
     documents: HashMap<SharedId, SharedMeta>,
     replicas: HashMap<SharedId, Replica>,
     /// The owner and document of each snapshot we requested.
@@ -86,29 +89,28 @@ pub struct Session {
 
 impl Session {
     /// A new session with no peers
-    pub fn create(me: EndpointId, seed: u64) -> Self {
+    /// Without a name, peers see our short id.
+    pub fn create(me: EndpointId, name: Option<String>, seed: u64) -> Self {
         let mut rng = StdRng::seed_from_u64(seed);
         let topic = TopicId::from_bytes(rng.random());
         log::info!("created session {}", topic.fmt_short());
-        Self::new(me, topic, rng)
+        Self::new(me, name, topic, rng)
     }
 
-    pub fn join(me: EndpointId, topic: TopicId, seed: u64) -> Self {
+    pub fn join(me: EndpointId, name: Option<String>, topic: TopicId, seed: u64) -> Self {
         log::info!("joining session {}", topic.fmt_short());
-        let mut session = Self::new(me, topic, StdRng::seed_from_u64(seed));
-        let nonce = session.rng.random();
-        session.send(
-            Channel::Topic(topic),
-            &GossipMessage::DocumentsRequest { nonce },
-        );
+        let mut session = Self::new(me, name, topic, StdRng::seed_from_u64(seed));
+        session.hello();
         session
     }
 
-    fn new(me: EndpointId, topic: TopicId, rng: StdRng) -> Self {
+    fn new(me: EndpointId, name: Option<String>, topic: TopicId, rng: StdRng) -> Self {
         Self {
             me,
+            name: name.unwrap_or_else(|| me.fmt_short().to_string()),
             topic,
             rng,
+            peers: HashMap::new(),
             documents: HashMap::new(),
             replicas: HashMap::new(),
             pending: HashMap::new(),
@@ -213,6 +215,11 @@ impl Session {
             log::info!("unsharing {}", id.fmt_short());
             self.send(Channel::Topic(self.topic), &GossipMessage::Unshare { id });
         }
+        let bye = GossipMessage::Bye {
+            peer: self.me,
+            nonce: self.rng.random(),
+        };
+        self.send(Channel::Topic(self.topic), &bye);
         self.transmits.into_iter()
     }
 
@@ -232,7 +239,18 @@ impl Session {
         };
 
         match message {
-            GossipMessage::DocumentsRequest { .. } => self.announce_owned(),
+            GossipMessage::Hello { peer, name, .. } => {
+                if self.peers.insert(peer, name).is_none() {
+                    log::info!("{} joined", peer.fmt_short());
+                    self.announce_owned();
+                    self.hello();
+                }
+            }
+            GossipMessage::Bye { peer, .. } => {
+                if self.peers.remove(&peer).is_some() {
+                    log::info!("{} left", peer.fmt_short());
+                }
+            }
             GossipMessage::Share {
                 id, owner, path, ..
             } => {
@@ -341,6 +359,15 @@ impl Session {
         self.replicas.remove(&id).is_some()
     }
 
+    fn hello(&mut self) {
+        let message = GossipMessage::Hello {
+            peer: self.me,
+            name: self.name.clone(),
+            nonce: self.rng.random(),
+        };
+        self.send(Channel::Topic(self.topic), &message);
+    }
+
     fn announce_owned(&mut self) {
         let owned: Vec<_> = self
             .documents
@@ -378,6 +405,18 @@ impl Session {
 
     pub fn topic(&self) -> TopicId {
         self.topic
+    }
+
+    pub fn peers(&self) -> &HashMap<EndpointId, String> {
+        &self.peers
+    }
+
+    pub fn name(&self, peer: EndpointId) -> String {
+        if peer == self.me {
+            return self.name.clone();
+        }
+        let name = self.peers.get(&peer).cloned();
+        name.unwrap_or_else(|| peer.fmt_short().to_string())
     }
 
     pub fn documents(&self) -> &HashMap<SharedId, SharedMeta> {

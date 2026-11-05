@@ -117,6 +117,14 @@
 | `diagnostics_picker` | Open diagnostic picker | normal: `` <space>d ``, select: `` <space>d `` |
 | `workspace_diagnostics_picker` | Open workspace diagnostic picker | normal: `` <space>D ``, select: `` <space>D `` |
 | `last_picker` | Open last picker | normal: `` <space>' ``, select: `` <space>' `` |
+| `session_new` | Yank current session ticket to clipboard, starting one if required | normal: `` <space>mn ``, select: `` <space>mn `` |
+| `session_join` | Join session from clipboard ticket | normal: `` <space>mj ``, select: `` <space>mj `` |
+| `session_share` | Share focused buffer | normal: `` <space>ms ``, select: `` <space>ms `` |
+| `session_unshare` | Stop syncing focused buffer | normal: `` <space>mu ``, select: `` <space>mu `` |
+| `session_file_picker` | Open shared buffer picker | normal: `` <space>mf ``, select: `` <space>mf `` |
+| `session_peer_picker` | Open peer picker | normal: `` <space>mp ``, select: `` <space>mp `` |
+| `session_info` | Show session status | normal: `` <space>mi ``, select: `` <space>mi `` |
+| `session_close` | Leave session | normal: `` <space>mq ``, select: `` <space>mq `` |
 | `insert_at_line_start` | Insert at start of line | normal: `` I ``, select: `` I `` |
 | `insert_at_line_end` | Insert at end of line | normal: `` A ``, select: `` A `` |
 | `open_below` | Open new line below selection | normal: `` o ``, select: `` o `` |

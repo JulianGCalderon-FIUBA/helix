@@ -236,6 +236,16 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "g" => changed_file_picker,
             "a" => code_action,
             "'" => last_picker,
+            "m" => { "Session"
+                "n" => session_new,
+                "j" => session_join,
+                "s" => session_share,
+                "u" => session_unshare,
+                "f" => session_file_picker,
+                "p" => session_peer_picker,
+                "i" => session_info,
+                "q" => session_close,
+            },
             "G" => { "Debug (experimental)" sticky=true
                 "l" => dap_launch,
                 "r" => dap_restart,

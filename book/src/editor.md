@@ -575,3 +575,4 @@ Controls p2p module.
 | Key      | Description                                                              | Default |
 | ---      | ---                                                                      | ---     |
 | `enable` | Enable p2p module                                                        | `true`  |
+| `name`   | Public name                                                              | Address |
