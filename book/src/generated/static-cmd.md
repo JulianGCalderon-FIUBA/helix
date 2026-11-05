@@ -118,9 +118,9 @@
 | `workspace_diagnostics_picker` | Open workspace diagnostic picker | normal: `` <space>D ``, select: `` <space>D `` |
 | `last_picker` | Open last picker | normal: `` <space>' ``, select: `` <space>' `` |
 | `session_new` | Yank a ticket to the current session to the clipboard, starting one if there is none | normal: `` <space>mn ``, select: `` <space>mn `` |
-| `session_join` | Join the session whose ticket is in the clipboard | normal: `` <space>mj ``, select: `` <space>mj `` |
+| `session_join` | Join the session with the ticket in the clipboard | normal: `` <space>mj ``, select: `` <space>mj `` |
 | `session_share` | Share the focused buffer | normal: `` <space>ms ``, select: `` <space>ms `` |
-| `session_unshare` | Stop syncing the focused buffer | normal: `` <space>mu ``, select: `` <space>mu `` |
+| `session_unshare` | Stop syncing the focused buffer, unsharing it if you own it | normal: `` <space>mu ``, select: `` <space>mu `` |
 | `session_file_picker` | Open shared buffer picker | normal: `` <space>mf ``, select: `` <space>mf `` |
 | `session_peer_picker` | Open peer picker | normal: `` <space>mp ``, select: `` <space>mp `` |
 | `session_info` | Show the session status | normal: `` <space>mi ``, select: `` <space>mi `` |

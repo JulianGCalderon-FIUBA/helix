@@ -103,6 +103,6 @@
 | `:session-new` | Yank a ticket to the current session to the clipboard, starting one if there is none. |
 | `:session-join` | Join the session with the given ticket, or the one in the clipboard. |
 | `:session-share` | Share the focused buffer. |
-| `:session-unshare` | Stop syncing the focused buffer. Peers lose it only if you shared it. |
+| `:session-unshare` | Stop syncing the focused buffer, unsharing it if you own it. |
 | `:session-info` | Show the session status. |
 | `:session-close` | Leave the session. |
