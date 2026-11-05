@@ -6,8 +6,8 @@ use anyhow::{ensure, Context, Result};
 use helix_core::{ChangeSet, Transaction};
 use helix_event::register_hook;
 use helix_p2p::{
-    net::{self, Channel, Service, SessionTicket, Ticket},
-    session::{Event, Session, Transmit},
+    net::{self, Channel, Service},
+    session::{Event, Session, SessionTicket, Ticket, Transmit},
     wire::SharedId,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -84,7 +84,9 @@ impl P2p {
 
     fn transmit(&self, transmit: Transmit) {
         match transmit {
-            Transmit::Subscribe(topic, bootstrap) => self.transport.subscribe(topic, bootstrap),
+            Transmit::Subscribe(topic, bootstrap) => {
+                drop(self.transport.subscribe(topic, bootstrap))
+            }
             Transmit::Unsubscribe(topic) => self.transport.unsubscribe(topic),
             Transmit::Send(channel, message) => self.transport.send(channel, message),
         }
@@ -164,10 +166,11 @@ impl Editor {
 
     pub fn handle_p2p_event(&mut self, event: net::Event) {
         match event {
-            net::Event::Exit(Channel::Session) => {
-                if self.leave_session().is_ok() {
-                    self.set_error("lost connection to the session");
-                }
+            net::Event::Exit(Channel::Topic(topic))
+                if self.session().is_ok_and(|session| session.topic() == topic) =>
+            {
+                let _ = self.leave_session();
+                self.set_error("lost connection to the session");
             }
             net::Event::Received(channel, message) => {
                 let _ = self.with_session(|session| session.receive(channel, &message));
@@ -182,7 +185,7 @@ impl Editor {
         let p2p = self.p2p_mut()?;
         let session = p2p.session.get_or_insert_with(|| {
             let session = Session::create(p2p.transport.id(), rand::random());
-            drop(p2p.transport.join(session.topic(), None));
+            drop(p2p.transport.subscribe(session.topic(), Vec::new()));
             session
         });
         let topic = session.topic();
@@ -196,7 +199,7 @@ impl Editor {
     pub fn join_session(
         &mut self,
         ticket: &str,
-    ) -> Result<(net::TopicId, impl Future<Output = Result<()>> + 'static)> {
+    ) -> Result<impl Future<Output = Result<()>> + 'static> {
         let p2p = self.p2p_mut()?;
         ensure!(p2p.session.is_none(), "already in a session");
         let SessionTicket { topic, addr } = SessionTicket::decode_string(ticket)?;
@@ -206,10 +209,12 @@ impl Editor {
         );
 
         // The session exists from now on, so that a second join fails.
-        let joined = p2p.transport.join(topic, Some(addr));
+        let bootstrap = addr.id;
+        p2p.transport.add_address(addr);
+        let joined = p2p.transport.subscribe(topic, vec![bootstrap]);
         p2p.session = Some(Session::join(p2p.transport.id(), topic, rand::random()));
         self.drain_session_queue();
-        Ok((topic, joined))
+        Ok(joined)
     }
 
     pub fn leave_session(&mut self) -> Result<()> {

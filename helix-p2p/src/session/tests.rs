@@ -5,6 +5,8 @@ use iroh::SecretKey;
 
 use super::*;
 
+const SESSION: TopicId = TopicId::from_bytes([1; 32]);
+
 struct PeerTransport {
     id: EndpointId,
     topics: HashSet<TopicId>,
@@ -25,8 +27,7 @@ impl PeerTransport {
 
     fn listens(&self, channel: Channel) -> bool {
         match channel {
-            Channel::Session => true,
-            Channel::Document(topic) => self.topics.contains(&topic),
+            Channel::Topic(topic) => self.topics.contains(&topic),
             Channel::Peer(id) => self.id == id,
         }
     }
@@ -85,12 +86,12 @@ struct Network {
 impl Network {
     fn join(&mut self) -> EndpointId {
         let id = SecretKey::generate().public();
-        let session = Session::join(id, TopicId::from_bytes([0; 32]), rand::random());
+        let session = Session::join(id, SESSION, rand::random());
         self.peers.push(Peer {
             session,
             transport: PeerTransport {
                 id,
-                topics: HashSet::new(),
+                topics: HashSet::from([SESSION]),
             },
             buffers: HashMap::new(),
             unshared: Vec::new(),
@@ -364,7 +365,7 @@ fn losing_a_document_swarm_unshares_it() {
 
     net.peer(guest)
         .session
-        .transport_exit(Channel::Document(id.topic()));
+        .transport_exit(Channel::Topic(id.topic()));
     net.flush();
 
     assert_eq!(net.peer(guest).unshared, [(id, "lost connection".into())]);
@@ -398,8 +399,8 @@ fn malformed_messages_are_dropped() {
     net.flush();
 
     for channel in [
-        Channel::Session,
-        Channel::Document(id.topic()),
+        Channel::Topic(SESSION),
+        Channel::Topic(id.topic()),
         Channel::Peer(owner),
     ] {
         net.peer(guest).session.receive(channel, b"garbage");

@@ -5,22 +5,19 @@ use std::{collections::HashMap, fmt, future::Future};
 
 use anyhow::Result;
 use bytes::Bytes;
-pub use iroh::EndpointId;
 use iroh::{
     address_lookup::memory::MemoryLookup,
     endpoint::{presets, Connection},
     protocol::{AcceptError, ProtocolHandler, Router},
-    Endpoint, EndpointAddr, SecretKey,
+    Endpoint, SecretKey,
 };
+pub use iroh::{EndpointAddr, EndpointId};
 pub use iroh_gossip::TopicId;
 use iroh_gossip::{
     api::{ApiError, Event as GossipEvent, GossipSender, GossipTopic},
     Gossip, ALPN,
 };
-use iroh_tickets::ParseError;
-pub use iroh_tickets::Ticket;
 use n0_future::{stream, StreamExt};
-use serde::{Deserialize, Serialize};
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     oneshot,
@@ -34,10 +31,8 @@ const PEER_ALPN: &[u8] = b"helix/peer/0";
 /// Where messages go to and come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Channel {
-    /// The session's gossip swarm.
-    Session,
-    /// A document's gossip swarm.
-    Document(TopicId),
+    /// A gossip swarm.
+    Topic(TopicId),
     /// A direct connection to a single peer.
     Peer(EndpointId),
 }
@@ -45,8 +40,7 @@ pub enum Channel {
 impl fmt::Display for Channel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Channel::Session => write!(f, "session"),
-            Channel::Document(topic) => write!(f, "document {}", topic.fmt_short()),
+            Channel::Topic(topic) => write!(f, "topic {}", topic.fmt_short()),
             Channel::Peer(peer) => write!(f, "peer {}", peer.fmt_short()),
         }
     }
@@ -63,8 +57,8 @@ pub enum Event {
 #[derive(Debug)]
 enum Request {
     Addr(oneshot::Sender<EndpointAddr>),
-    Join(TopicId, Option<EndpointAddr>, oneshot::Sender<Result<()>>),
-    Subscribe(TopicId, Vec<EndpointId>),
+    AddAddress(EndpointAddr),
+    Subscribe(TopicId, Vec<EndpointId>, oneshot::Sender<Result<()>>),
     Unsubscribe(TopicId),
     Send(Channel, Bytes),
     Leave,
@@ -108,23 +102,25 @@ impl Service {
         async move { rx.await.expect("actor should reply") }
     }
 
-    /// The request is sent right away, so the future can be dropped.
-    pub fn join(
+    /// Lets us reach a peer we haven't met through gossip.
+    pub fn add_address(&self, addr: EndpointAddr) {
+        self.request(Request::AddAddress(addr));
+    }
+
+    /// The request is sent right away, so the future can be dropped. A topic
+    /// that fails to open exits like a lost one.
+    pub fn subscribe(
         &self,
         topic: TopicId,
-        bootstrap: Option<EndpointAddr>,
+        bootstrap: Vec<EndpointId>,
     ) -> impl Future<Output = Result<()>> + 'static {
         let (tx, rx) = oneshot::channel();
-        self.request(Request::Join(topic, bootstrap, tx));
+        self.request(Request::Subscribe(topic, bootstrap, tx));
         async move { rx.await.expect("actor should reply") }
     }
 
     pub fn leave(&self) {
         self.request(Request::Leave);
-    }
-
-    pub fn subscribe(&self, topic: TopicId, bootstrap: Vec<EndpointId>) {
-        self.request(Request::Subscribe(topic, bootstrap));
     }
 
     pub fn unsubscribe(&self, topic: TopicId) {
@@ -142,25 +138,6 @@ impl Service {
     }
 }
 
-/// An invitation into a session. Any member can hand one out.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionTicket {
-    pub topic: TopicId,
-    pub addr: EndpointAddr,
-}
-
-impl Ticket for SessionTicket {
-    const KIND: &'static str = "helix";
-
-    fn encode_bytes(&self) -> Vec<u8> {
-        postcard::to_stdvec(self).expect("ticket should serialize")
-    }
-
-    fn decode_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
-        Ok(postcard::from_bytes(bytes)?)
-    }
-}
-
 type Events = stream::Boxed<Option<Result<GossipEvent, ApiError>>>;
 type PeerMessages = stream::Boxed<Result<Bytes>>;
 
@@ -168,7 +145,7 @@ struct Actor {
     endpoint: Endpoint,
     _router: Router,
     gossip: Gossip,
-    /// Addresses learned from tickets.
+    /// Addresses we were given.
     addresses: MemoryLookup,
     events: UnboundedSender<Event>,
     senders: HashMap<Channel, GossipSender>,
@@ -247,15 +224,18 @@ impl Actor {
             Request::Addr(chan) => {
                 let _ = chan.send(self.endpoint.addr());
             }
-            Request::Join(topic, bootstrap, chan) => {
-                let result = self.join(topic, bootstrap).await;
+            Request::AddAddress(addr) => self.addresses.add_endpoint_info(addr),
+            Request::Subscribe(topic, bootstrap, chan) => {
+                let result = self.subscribe(topic, bootstrap).await;
                 if let Err(err) = &result {
-                    log::warn!("failed to join session: {err:#}");
+                    self.exit(
+                        Channel::Topic(topic),
+                        format!("failed to subscribe: {err:#}"),
+                    );
                 }
                 let _ = chan.send(result);
             }
-            Request::Subscribe(id, bootstrap) => self.subscribe_document(id, bootstrap).await,
-            Request::Unsubscribe(id) => self.unsubscribe(Channel::Document(id)),
+            Request::Unsubscribe(topic) => self.unsubscribe(Channel::Topic(topic)),
             Request::Send(Channel::Peer(peer), message) => {
                 if let Err(err) = self.send_to_peer(peer, message).await {
                     self.exit(Channel::Peer(peer), format!("failed to send: {err:#}"));
@@ -270,36 +250,16 @@ impl Actor {
         }
     }
 
-    async fn join(&mut self, topic: TopicId, bootstrap: Option<EndpointAddr>) -> Result<()> {
-        let subscription = match bootstrap {
-            None => self.gossip.subscribe(topic, Vec::new()).await?,
-            Some(addr) => {
-                let bootstrap = addr.id;
-                self.addresses.add_endpoint_info(addr);
-                log::info!(
-                    "joining session {} through {}",
-                    topic.fmt_short(),
-                    bootstrap.fmt_short()
-                );
-                self.gossip
-                    .subscribe_and_join(topic, vec![bootstrap])
-                    .await?
-            }
-        };
-        self.add_subscription(Channel::Session, subscription);
-        Ok(())
-    }
-
-    async fn subscribe_document(&mut self, id: TopicId, bootstrap: Vec<EndpointId>) {
-        log::debug!("subscribing to document {}", id.fmt_short());
+    async fn subscribe(&mut self, topic: TopicId, bootstrap: Vec<EndpointId>) -> Result<()> {
+        log::debug!("subscribing to topic {}", topic.fmt_short());
         let subscription = if bootstrap.is_empty() {
-            self.gossip.subscribe(id, bootstrap).await
+            self.gossip.subscribe(topic, bootstrap).await?
         } else {
             // Wait until connected to a peer. This can stall the actor.
-            self.gossip.subscribe_and_join(id, bootstrap).await
-        }
-        .expect("gossip should be running");
-        self.add_subscription(Channel::Document(id), subscription);
+            self.gossip.subscribe_and_join(topic, bootstrap).await?
+        };
+        self.add_subscription(Channel::Topic(topic), subscription);
+        Ok(())
     }
 
     fn add_subscription(&mut self, channel: Channel, subscription: GossipTopic) {
@@ -366,7 +326,7 @@ impl Actor {
         self.receivers.clear();
         self.peers.clear();
         self.peer_messages.clear();
-        log::info!("left session");
+        log::info!("left every topic and peer");
     }
 
     fn on_event(&mut self, channel: Channel, event: Option<Result<GossipEvent, ApiError>>) {
@@ -406,7 +366,7 @@ impl Actor {
     fn exit(&mut self, channel: Channel, reason: String) {
         log::error!("lost {channel}: {reason}");
         match channel {
-            Channel::Session | Channel::Document(_) => self.unsubscribe(channel),
+            Channel::Topic(_) => self.unsubscribe(channel),
             Channel::Peer(peer) => self.disconnect(peer),
         }
         let _ = self.events.send(Event::Exit(channel));

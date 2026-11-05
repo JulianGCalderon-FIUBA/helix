@@ -9,14 +9,35 @@ use std::{
 use anyhow::{ensure, Context, Result};
 use bytes::Bytes;
 use helix_core::{Change, ChangeSet, Rope};
+use iroh_tickets::ParseError;
+pub use iroh_tickets::Ticket;
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     crdt::Replica,
-    net::{Channel, EndpointId, TopicId},
+    net::{Channel, EndpointAddr, EndpointId, TopicId},
     wire::{self, GossipMessage, PeerMessage, SharedId},
 };
+
+/// An invitation into a session. Any member can hand one out.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTicket {
+    pub topic: TopicId,
+    pub addr: EndpointAddr,
+}
+
+impl Ticket for SessionTicket {
+    const KIND: &'static str = "helix";
+
+    fn encode_bytes(&self) -> Vec<u8> {
+        postcard::to_stdvec(self).expect("ticket should serialize")
+    }
+
+    fn decode_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
+        Ok(postcard::from_bytes(bytes)?)
+    }
+}
 
 /// Metadata about a shared document, opened or not.
 #[derive(Debug, Clone)]
@@ -75,7 +96,10 @@ impl Session {
     pub fn join(me: EndpointId, topic: TopicId, seed: u64) -> Self {
         let mut session = Self::new(me, topic, StdRng::seed_from_u64(seed));
         let nonce = session.rng.random();
-        session.send(Channel::Session, &GossipMessage::DocumentsRequest { nonce });
+        session.send(
+            Channel::Topic(topic),
+            &GossipMessage::DocumentsRequest { nonce },
+        );
         session
     }
 
@@ -136,10 +160,7 @@ impl Session {
             return;
         };
         let update = replica.from_local(changes);
-        self.send(
-            Channel::Document(id.topic()),
-            &GossipMessage::Edit { update },
-        );
+        self.send(Channel::Topic(id.topic()), &GossipMessage::Edit { update });
     }
 
     pub fn close(&mut self, id: SharedId) {
@@ -150,8 +171,8 @@ impl Session {
     pub fn transport_exit(&mut self, channel: Channel) {
         match channel {
             // The driver drops the session when it loses it.
-            Channel::Session => {}
-            Channel::Document(topic) => {
+            Channel::Topic(topic) if topic == self.topic => {}
+            Channel::Topic(topic) => {
                 let id = SharedId::from(topic);
                 if self.unsync(id) {
                     self.events.push_back(Event::Unshared {
@@ -189,17 +210,17 @@ impl Session {
             .collect();
         for id in owned {
             log::info!("unsharing {}", id.fmt_short());
-            self.send(Channel::Session, &GossipMessage::Unshare { id });
+            self.send(Channel::Topic(self.topic), &GossipMessage::Unshare { id });
         }
         self.transmits.into_iter()
     }
 
     /// Receive data from the network layer
     pub fn receive(&mut self, channel: Channel, message: &[u8]) {
-        if let Channel::Peer(peer) = channel {
-            self.receive_from_peer(peer, message);
-            return;
-        }
+        let topic = match channel {
+            Channel::Peer(peer) => return self.receive_from_peer(peer, message),
+            Channel::Topic(topic) => topic,
+        };
 
         let message: GossipMessage = match wire::decode(message) {
             Ok(message) => message,
@@ -209,20 +230,19 @@ impl Session {
             }
         };
 
-        match (channel, message) {
-            (Channel::Session, GossipMessage::DocumentsRequest { .. }) => self.announce_owned(),
-            (
-                Channel::Session,
-                GossipMessage::Share {
-                    id, owner, path, ..
-                },
-            ) => {
+        // Any other topic is a document's, or an old session's.
+        let in_session = topic == self.topic;
+        match message {
+            GossipMessage::DocumentsRequest { .. } if in_session => self.announce_owned(),
+            GossipMessage::Share {
+                id, owner, path, ..
+            } if in_session => {
                 let meta = SharedMeta { id, owner, path };
                 if self.documents.insert(id, meta).is_none() {
                     log::info!("{} shared {}", owner.fmt_short(), id.fmt_short());
                 }
             }
-            (Channel::Session, GossipMessage::Unshare { id }) => {
+            GossipMessage::Unshare { id } if in_session => {
                 if let Some(meta) = self.documents.remove(&id) {
                     log::info!("{} unshared {}", meta.owner.fmt_short(), id.fmt_short());
                 }
@@ -234,10 +254,10 @@ impl Session {
                     });
                 }
             }
-            (Channel::Document(topic), GossipMessage::Edit { update }) => {
+            GossipMessage::Edit { update } if !in_session => {
                 self.remote_change(SharedId::from(topic), &update)
             }
-            (channel, _) => log::warn!("dropping message sent to the wrong channel: {channel}"),
+            _ => log::warn!("dropping message sent to the wrong channel: {channel}"),
         }
     }
 
@@ -313,7 +333,7 @@ impl Session {
         if self.owns(id) {
             log::info!("unsharing {}", id.fmt_short());
             self.documents.remove(&id);
-            self.send(Channel::Session, &GossipMessage::Unshare { id });
+            self.send(Channel::Topic(self.topic), &GossipMessage::Unshare { id });
         }
         self.replicas.remove(&id).is_some()
     }
@@ -337,7 +357,7 @@ impl Session {
             path: meta.path.clone(),
             nonce: self.rng.random(),
         };
-        self.send(Channel::Session, &message);
+        self.send(Channel::Topic(self.topic), &message);
     }
 
     fn send(&mut self, channel: Channel, message: &impl Serialize) {

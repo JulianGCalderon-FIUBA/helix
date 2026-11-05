@@ -2997,23 +2997,15 @@ fn session_join(
         return Ok(());
     }
 
-    let (topic, joined) = cx.editor.join_session(&args[0])?;
+    let joined = cx.editor.join_session(&args[0])?;
     cx.editor.set_status("joining session");
     cx.jobs.callback(async move {
         let result = joined.await;
         Ok(job::Callback::Editor(Box::new(
             move |editor: &mut Editor| match result {
                 Ok(()) => editor.set_status("joined session"),
-                Err(err) => {
-                    // Unless the user already left it for another one.
-                    if editor
-                        .session()
-                        .is_ok_and(|session| session.topic() == topic)
-                    {
-                        let _ = editor.leave_session();
-                    }
-                    editor.set_error(format!("failed to join session: {err:#}"));
-                }
+                // The transport reports the failure as an exit, which leaves.
+                Err(err) => editor.set_error(format!("failed to join session: {err:#}")),
             },
         )))
     });
