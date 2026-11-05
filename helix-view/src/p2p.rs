@@ -86,12 +86,6 @@ impl P2p {
         }
     }
 
-    fn send_transmits(&mut self) {
-        while let Some(transmit) = self.session.as_mut().and_then(Session::poll_transmit) {
-            self.transmit(transmit);
-        }
-    }
-
     fn transmit(&self, transmit: Transmit) {
         match transmit {
             Transmit::Subscribe(topic, bootstrap) => {
@@ -158,7 +152,9 @@ impl Editor {
         let Some(p2p) = &mut self.p2p else {
             return;
         };
-        p2p.send_transmits();
+        while let Some(transmit) = p2p.session.as_mut().and_then(Session::poll_transmit) {
+            p2p.transmit(transmit);
+        }
         let events: Vec<_> = iter::from_fn(|| p2p.session.as_mut()?.poll_event()).collect();
         for event in events {
             self.apply_session_event(event);
