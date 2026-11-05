@@ -57,10 +57,12 @@ impl SharedMeta {
     }
 }
 
-/// What the session tells the driver.
+/// What the session tells the driver. `Opened` carries the whole text,
+/// replacing whatever the buffer holds.
 #[derive(Debug)]
 pub enum Event {
     Changes { id: SharedId, changes: Vec<Change> },
+    Opened { id: SharedId, text: String },
     Unshared { id: SharedId, reason: String },
 }
 
@@ -304,7 +306,7 @@ impl Session {
                     return;
                 };
                 match replica {
-                    Ok(replica) => self.remote_change(id, &replica),
+                    Ok(replica) => self.load_snapshot(id, &replica),
                     Err(reason) => {
                         log::warn!(
                             "{} refused snapshot of {}: {reason}",
@@ -348,6 +350,18 @@ impl Session {
         if !changes.is_empty() {
             self.events.push_back(Event::Changes { id, changes });
         }
+    }
+
+    fn load_snapshot(&mut self, id: SharedId, snapshot: &[u8]) {
+        let Some(replica) = self.replicas.get_mut(&id) else {
+            return;
+        };
+        if let Err(err) = replica.from_remote(snapshot) {
+            log::warn!("dropping snapshot of {}: {err:#}", id.fmt_short());
+            return;
+        }
+        let text = replica.text();
+        self.events.push_back(Event::Opened { id, text });
     }
 
     fn unsync(&mut self, id: SharedId) -> bool {
