@@ -100,9 +100,9 @@
 | `:workspace-trust` | Allow language servers and local config for the current workspace. |
 | `:workspace-untrust` | Revoke the current workspace's trust grant or exclusion. |
 | `:workspace-exclude` | Mark the current workspace as never-prompt. Never prompts for trust again. |
-| `:session-new` | Start a collaborative session if there is none, and yank its ticket to the clipboard. |
-| `:session-join` | Join a collaborative session with the given ticket, or the one in the clipboard. |
-| `:session-share` | Share the focused buffer with every peer of the current collaborative session. |
+| `:session-new` | Yank a ticket to the current session to the clipboard, starting one if there is none. |
+| `:session-join` | Join the session with the given ticket, or the one in the clipboard. |
+| `:session-share` | Share the focused buffer. |
 | `:session-unshare` | Stop syncing the focused buffer. Peers lose it only if you shared it. |
-| `:session-info` | Show the status of the current collaborative session. |
-| `:session-close` | Leave the current collaborative session. |
+| `:session-info` | Show the session status. |
+| `:session-close` | Leave the session. |

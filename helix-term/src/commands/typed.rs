@@ -4178,7 +4178,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-new",
         aliases: &[],
-        doc: "Start a collaborative session if there is none, and yank its ticket to the clipboard.",
+        doc: "Yank a ticket to the current session to the clipboard, starting one if there is none.",
         fun: session_new,
         completer: CommandCompleter::none(),
         signature: Signature {
@@ -4189,7 +4189,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-join",
         aliases: &[],
-        doc: "Join a collaborative session with the given ticket, or the one in the clipboard.",
+        doc: "Join the session with the given ticket, or the one in the clipboard.",
         fun: session_join,
         completer: CommandCompleter::none(),
         signature: Signature {
@@ -4200,7 +4200,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-share",
         aliases: &[],
-        doc: "Share the focused buffer with every peer of the current collaborative session.",
+        doc: "Share the focused buffer.",
         fun: session_share,
         completer: CommandCompleter::none(),
         signature: Signature {
@@ -4222,7 +4222,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-info",
         aliases: &[],
-        doc: "Show the status of the current collaborative session.",
+        doc: "Show the session status.",
         fun: session_info,
         completer: CommandCompleter::none(),
         signature: Signature {
@@ -4233,7 +4233,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "session-close",
         aliases: &[],
-        doc: "Leave the current collaborative session.",
+        doc: "Leave the session.",
         fun: session_close,
         completer: CommandCompleter::none(),
         signature: Signature {
