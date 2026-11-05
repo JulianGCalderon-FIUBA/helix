@@ -248,20 +248,28 @@ impl Editor {
         Ok(())
     }
 
-    pub fn remote_name(&self, doc: &Document, base_name: bool) -> Option<String> {
+    pub fn remote_full_name(&self, doc: &Document) -> Option<String> {
+        let (owner, path) = self.remote_path(doc)?;
+        Some(format!("{owner}:{}", path.display()))
+    }
+
+    pub fn remote_base_name(&self, doc: &Document) -> Option<String> {
+        let (owner, path) = self.remote_path(doc)?;
+        let name = path.file_name().map_or(path, Path::new);
+        Some(format!("{owner}:{}", name.display()))
+    }
+
+    fn remote_path(&self, doc: &Document) -> Option<(String, &Path)> {
         let session = self.session().ok()?;
         let meta = session.documents().get(&doc.shared?)?;
         if session.owns(meta.id) {
             return None;
         }
-        let mut path = meta
-            .path
-            .as_deref()
-            .unwrap_or(Path::new(SCRATCH_BUFFER_NAME));
-        if base_name {
-            path = path.file_name().map_or(path, Path::new);
-        }
-        Some(format!("{}:{}", session.name(meta.owner), path.display()))
+        let path = meta.path.as_deref();
+        Some((
+            session.name(meta.owner),
+            path.unwrap_or(Path::new(SCRATCH_BUFFER_NAME)),
+        ))
     }
 
     pub fn shared_document(&self, id: SharedId) -> Option<&Document> {
