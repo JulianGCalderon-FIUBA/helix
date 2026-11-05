@@ -423,7 +423,7 @@ impl Session {
         &self.documents
     }
 
-    fn owns(&self, id: SharedId) -> bool {
+    pub fn owns(&self, id: SharedId) -> bool {
         self.documents
             .get(&id)
             .is_some_and(|meta| meta.owner == self.me)

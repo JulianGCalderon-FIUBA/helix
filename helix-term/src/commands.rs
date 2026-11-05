@@ -3332,10 +3332,11 @@ fn buffer_picker(cx: &mut Context) {
 
     let new_meta = |doc: &Document| BufferMeta {
         id: doc.id(),
-        path: doc
-            .path()
-            .map(ToOwned::to_owned)
-            .map(helix_stdx::path::get_relative_path),
+        path: cx.editor.remote_path(doc).map(Cow::Owned).or_else(|| {
+            doc.path()
+                .map(ToOwned::to_owned)
+                .map(helix_stdx::path::get_relative_path)
+        }),
         is_modified: doc.is_modified(),
         is_current: doc.id() == current,
         is_shared: doc.shared.is_some(),

@@ -1,6 +1,10 @@
 //! Glue between the editor and the helix-p2p session.
 
-use std::{future::Future, iter};
+use std::{
+    future::Future,
+    iter,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{ensure, Context, Result};
 use helix_core::{ChangeSet, Transaction};
@@ -14,6 +18,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 
 use crate::{
+    document::SCRATCH_BUFFER_NAME,
     editor::Action,
     events::{DocumentDidChange, DocumentDidClose},
     Document, DocumentId, Editor,
@@ -245,6 +250,19 @@ impl Editor {
             doc.shared = None;
         }
         Ok(())
+    }
+
+    pub fn remote_path(&self, doc: &Document) -> Option<PathBuf> {
+        let session = self.session().ok()?;
+        let meta = session.documents().get(&doc.shared?)?;
+        if session.owns(meta.id) {
+            return None;
+        }
+        let path = meta
+            .path
+            .as_deref()
+            .map_or(SCRATCH_BUFFER_NAME.into(), Path::to_string_lossy);
+        Some(format!("{}:{path}", session.name(meta.owner)).into())
     }
 
     pub fn shared_document(&self, id: SharedId) -> Option<&Document> {
