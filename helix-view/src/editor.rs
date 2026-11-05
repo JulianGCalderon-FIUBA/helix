@@ -1370,7 +1370,7 @@ pub enum EditorEvent {
     ConfigEvent(ConfigEvent),
     LanguageServerMessage((LanguageServerId, Call)),
     DebuggerEvent((DebugAdapterId, dap::Payload)),
-    P2pEvent(helix_p2p::net::Event),
+    P2pEvent(p2p::P2pEvent),
     IdleTimer,
     Redraw,
 }

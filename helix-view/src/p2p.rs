@@ -20,8 +20,17 @@ use crate::{
 };
 
 /// What happened to a shared buffer locally.
-pub(crate) enum LocalEvent {
+#[derive(Debug)]
+pub enum LocalEvent {
     Change(SharedId, ChangeSet),
+}
+
+/// Something p2p needs the editor to handle.
+#[derive(Debug)]
+pub enum P2pEvent {
+    /// Queued by the hooks, because they can't reach the session.
+    Local(LocalEvent),
+    Net(net::Event),
 }
 
 pub struct P2p {
@@ -50,20 +59,13 @@ impl P2p {
         self.session.as_ref()
     }
 
-    /// Waits for a network event, applying local events meanwhile.
-    pub(crate) async fn next_event(&mut self) -> net::Event {
-        loop {
-            // Local edits come first, so that remote edits apply on top of them.
-            tokio::select! {
-                biased;
-                Some(event) = self.local_events.recv() => {
-                    self.apply_local_event(event);
-                    // Local edits only queue messages, so they don't need the editor.
-                    self.send_transmits();
-                }
-                Some(event) = self.incoming.next() => return event,
-                else => unreachable!("local event queue closed"),
-            }
+    pub(crate) async fn next_event(&mut self) -> P2pEvent {
+        // Local edits come first, so that remote edits apply on top of them.
+        tokio::select! {
+            biased;
+            Some(event) = self.local_events.recv() => P2pEvent::Local(event),
+            Some(event) = self.incoming.next() => P2pEvent::Net(event),
+            else => unreachable!("local event queue closed"),
         }
     }
 
@@ -160,7 +162,22 @@ impl Editor {
         }
     }
 
-    pub fn handle_p2p_net_event(&mut self, event: net::Event) {
+    pub fn handle_p2p_event(&mut self, event: P2pEvent) {
+        match event {
+            P2pEvent::Local(event) => self.handle_p2p_local_event(event),
+            P2pEvent::Net(event) => self.handle_p2p_net_event(event),
+        }
+    }
+
+    fn handle_p2p_local_event(&mut self, event: LocalEvent) {
+        let Some(p2p) = &mut self.p2p else {
+            return;
+        };
+        p2p.apply_local_event(event);
+        self.drain_session_queue();
+    }
+
+    fn handle_p2p_net_event(&mut self, event: net::Event) {
         match event {
             net::Event::Exit(Channel::Topic(topic))
                 if self.session().is_ok_and(|session| session.topic() == topic) =>

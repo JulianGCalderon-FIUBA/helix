@@ -685,7 +685,7 @@ impl Application {
                 }
             }
             EditorEvent::P2pEvent(event) => {
-                self.editor.handle_p2p_net_event(event);
+                self.editor.handle_p2p_event(event);
                 helix_event::request_redraw();
             }
             EditorEvent::Redraw => {
