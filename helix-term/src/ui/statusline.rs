@@ -447,13 +447,16 @@ fn render_file_name<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    let title = {
-        let rel_path = context.doc.relative_path();
-        let path = rel_path
-            .as_ref()
-            .map(|p| p.to_string_lossy())
-            .unwrap_or_else(|| SCRATCH_BUFFER_NAME.into());
-        format!(" {} ", path)
+    let title = match context.editor.remote_name(context.doc, false) {
+        Some(name) => format!(" {name} "),
+        None => {
+            let rel_path = context.doc.relative_path();
+            let path = rel_path
+                .as_ref()
+                .map(|p| p.to_string_lossy())
+                .unwrap_or_else(|| SCRATCH_BUFFER_NAME.into());
+            format!(" {} ", path)
+        }
     };
 
     write(context, title.into());
@@ -463,13 +466,16 @@ fn render_file_absolute_path<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    let title = {
-        let path = context
-            .doc
-            .path()
-            .as_ref()
-            .map_or_else(|| SCRATCH_BUFFER_NAME.into(), |p| p.to_string_lossy());
-        format!(" {} ", path)
+    let title = match context.editor.remote_name(context.doc, false) {
+        Some(name) => format!(" {name} "),
+        None => {
+            let path = context
+                .doc
+                .path()
+                .as_ref()
+                .map_or_else(|| SCRATCH_BUFFER_NAME.into(), |p| p.to_string_lossy());
+            format!(" {} ", path)
+        }
     };
 
     write(context, title.into());
@@ -504,13 +510,16 @@ fn render_file_base_name<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    let title = {
-        let rel_path = context.doc.relative_path();
-        let path = rel_path
-            .as_ref()
-            .and_then(|p| p.file_name().map(|s| s.to_string_lossy()))
-            .unwrap_or_else(|| SCRATCH_BUFFER_NAME.into());
-        format!(" {} ", path)
+    let title = match context.editor.remote_name(context.doc, true) {
+        Some(name) => format!(" {name} "),
+        None => {
+            let rel_path = context.doc.relative_path();
+            let path = rel_path
+                .as_ref()
+                .and_then(|p| p.file_name().map(|s| s.to_string_lossy()))
+                .unwrap_or_else(|| SCRATCH_BUFFER_NAME.into());
+            format!(" {} ", path)
+        }
     };
 
     write(context, title.into());

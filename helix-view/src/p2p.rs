@@ -1,10 +1,6 @@
 //! Glue between the editor and the helix-p2p session.
 
-use std::{
-    future::Future,
-    iter,
-    path::{Path, PathBuf},
-};
+use std::{future::Future, iter, path::Path};
 
 use anyhow::{ensure, Context, Result};
 use helix_core::{ChangeSet, Transaction};
@@ -252,17 +248,20 @@ impl Editor {
         Ok(())
     }
 
-    pub fn remote_path(&self, doc: &Document) -> Option<PathBuf> {
+    pub fn remote_name(&self, doc: &Document, base_name: bool) -> Option<String> {
         let session = self.session().ok()?;
         let meta = session.documents().get(&doc.shared?)?;
         if session.owns(meta.id) {
             return None;
         }
-        let path = meta
+        let mut path = meta
             .path
             .as_deref()
-            .map_or(SCRATCH_BUFFER_NAME.into(), Path::to_string_lossy);
-        Some(format!("{}:{path}", session.name(meta.owner)).into())
+            .unwrap_or(Path::new(SCRATCH_BUFFER_NAME));
+        if base_name {
+            path = path.file_name().map_or(path, Path::new);
+        }
+        Some(format!("{}:{}", session.name(meta.owner), path.display()))
     }
 
     pub fn shared_document(&self, id: SharedId) -> Option<&Document> {
