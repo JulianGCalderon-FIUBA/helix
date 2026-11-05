@@ -280,12 +280,19 @@ impl Editor {
         }
 
         self.with_session(|session| session.open(id))??;
-        let doc_id = self.new_file(action);
-        doc_mut!(self, &doc_id).shared = Some(id);
-
         let session = self.session()?;
         let meta = &session.documents()[&id];
         let status = format!("opening {} from {}", meta.label(), session.name(meta.owner));
+        let path = meta.path.clone();
+
+        let doc_id = self.new_file(action);
+        let loader = self.syn_loader.load();
+        let doc = doc_mut!(self, &doc_id);
+        doc.shared = Some(id);
+        if let Some(language) = path.and_then(|path| loader.language_for_filename(&path)) {
+            doc.set_language(Some(loader.language(language).config().clone()), &loader);
+        }
+
         self.set_status(status);
         Ok(())
     }
