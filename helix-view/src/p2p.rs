@@ -223,7 +223,7 @@ impl Editor {
         for transmit in session.leave() {
             p2p.transmit(transmit);
         }
-        p2p.transport.leave();
+        p2p.transport.reset();
 
         for doc in self.documents_mut() {
             doc.shared = None;

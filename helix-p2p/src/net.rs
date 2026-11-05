@@ -61,7 +61,7 @@ enum Request {
     Subscribe(TopicId, Vec<EndpointId>, oneshot::Sender<Result<()>>),
     Unsubscribe(TopicId),
     Send(Channel, Bytes),
-    Leave,
+    Reset,
 }
 
 #[derive(Clone)]
@@ -119,8 +119,8 @@ impl Service {
         async move { rx.await.expect("actor should reply") }
     }
 
-    pub fn leave(&self) {
-        self.request(Request::Leave);
+    pub fn reset(&self) {
+        self.request(Request::Reset);
     }
 
     pub fn unsubscribe(&self, topic: TopicId) {
@@ -246,7 +246,7 @@ impl Actor {
                     log::warn!("failed to broadcast: {err:#}")
                 }
             }
-            Request::Leave => self.leave(),
+            Request::Reset => self.reset(),
         }
     }
 
@@ -321,7 +321,7 @@ impl Actor {
         Ok(())
     }
 
-    fn leave(&mut self) {
+    fn reset(&mut self) {
         self.senders.clear();
         self.receivers.clear();
         self.peers.clear();
