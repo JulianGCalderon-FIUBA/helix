@@ -94,6 +94,7 @@ impl Session {
     }
 
     pub fn join(me: EndpointId, topic: TopicId, seed: u64) -> Self {
+        log::info!("joining session {}", topic.fmt_short());
         let mut session = Self::new(me, topic, StdRng::seed_from_u64(seed));
         let nonce = session.rng.random();
         session.send(
