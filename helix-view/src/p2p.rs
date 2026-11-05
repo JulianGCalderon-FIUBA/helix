@@ -222,7 +222,6 @@ impl Editor {
             "cannot join your own session"
         );
 
-        // The session exists from now on, so that a second join fails.
         let bootstrap = addr.id;
         p2p.transport.add_address(addr);
         let joined = p2p.transport.subscribe(topic, vec![bootstrap]);
