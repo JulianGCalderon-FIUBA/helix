@@ -1,5 +1,5 @@
 use anyhow::Context as _;
-use helix_p2p::{net::EndpointId, session::SharedMeta};
+use helix_p2p::session::SharedMeta;
 use helix_view::{doc, Editor};
 
 use crate::{
@@ -36,19 +36,27 @@ pub fn session_close(cx: &mut Context) {
 
 /// Opens a picker of every buffer shared in the session.
 pub fn session_file_picker(cx: &mut Context) {
-    let items: Vec<SharedMeta> = match cx.editor.session() {
-        Ok(session) => session.documents().values().cloned().collect(),
+    // Each document with its owner's name.
+    let items: Vec<(SharedMeta, String)> = match cx.editor.session() {
+        Ok(session) => session
+            .documents()
+            .values()
+            .map(|meta| (meta.clone(), session.name(meta.owner)))
+            .collect(),
         Err(err) => return cx.editor.set_error(err.to_string()),
     };
 
     let columns = [
-        PickerColumn::new("owner", |meta: &SharedMeta, _| {
-            meta.owner.fmt_short().to_string().into()
+        PickerColumn::new("owner", |(_, owner): &(SharedMeta, String), _| {
+            owner.as_str().into()
         }),
-        PickerColumn::new("path", |meta: &SharedMeta, config: &PathStyleConfig| {
-            config.stylize(meta.path.as_deref(), None)
-        }),
-        PickerColumn::new("id", |meta: &SharedMeta, _| {
+        PickerColumn::new(
+            "path",
+            |(meta, _): &(SharedMeta, String), config: &PathStyleConfig| {
+                config.stylize(meta.path.as_deref(), None)
+            },
+        ),
+        PickerColumn::new("id", |(meta, _): &(SharedMeta, String), _| {
             meta.id.fmt_short().to_string().into()
         }),
     ];
@@ -58,13 +66,13 @@ pub fn session_file_picker(cx: &mut Context) {
         1,
         items,
         PathStyleConfig::new(&cx.editor.theme),
-        |cx, meta, action| {
+        |cx, (meta, _), action| {
             if let Err(err) = cx.editor.open_shared_document(meta.id, action) {
                 cx.editor.set_error(err.to_string());
             }
         },
     )
-    .with_preview(|editor, meta| {
+    .with_preview(|editor, (meta, _)| {
         // Only buffers we subscribed to have preview.
         let doc = editor.shared_document(meta.id)?;
         let lines = doc.selections().values().next().map(|selection| {
@@ -78,24 +86,25 @@ pub fn session_file_picker(cx: &mut Context) {
 
 /// Opens a picker of the other peers in the session.
 pub fn session_peer_picker(cx: &mut Context) {
-    let items: Vec<(EndpointId, usize)> = match cx.editor.session() {
+    // Each peer's name with how many documents they share.
+    let items: Vec<(String, usize)> = match cx.editor.session() {
         Ok(session) => session
             .peers()
             .iter()
-            .map(|&peer| {
+            .map(|(&peer, name)| {
                 let documents = session.documents().values();
-                (peer, documents.filter(|meta| meta.owner == peer).count())
+                let shared = documents.filter(|meta| meta.owner == peer).count();
+                (name.clone(), shared)
             })
             .collect(),
         Err(err) => return cx.editor.set_error(err.to_string()),
     };
 
-    // TODO: show peer names (#50).
     let columns = [
-        PickerColumn::new("peer", |(peer, _): &(EndpointId, usize), _| {
-            peer.fmt_short().to_string().into()
+        PickerColumn::new("peer", |(name, _): &(String, usize), _| {
+            name.as_str().into()
         }),
-        PickerColumn::new("shared", |(_, shared): &(EndpointId, usize), _| {
+        PickerColumn::new("shared", |(_, shared): &(String, usize), _| {
             shared.to_string().into()
         }),
     ];

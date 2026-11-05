@@ -443,11 +443,16 @@ pub struct Config {
 pub struct P2pConfig {
     /// Only read at startup.
     pub enable: bool,
+    /// Read when starting or joining a session.
+    pub name: Option<String>,
 }
 
 impl Default for P2pConfig {
     fn default() -> Self {
-        Self { enable: true }
+        Self {
+            enable: true,
+            name: None,
+        }
     }
 }
 

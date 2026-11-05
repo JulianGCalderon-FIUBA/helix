@@ -46,6 +46,7 @@ pub enum GossipMessage {
     /// Sent on joining, and in reply to a peer we didn't know.
     Hello {
         peer: EndpointId,
+        name: String,
         nonce: u64,
     },
     Bye {

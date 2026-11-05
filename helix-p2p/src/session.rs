@@ -2,7 +2,7 @@
 //! It relies on the transport layer to communicate with peers.
 
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     path::PathBuf,
 };
 
@@ -74,9 +74,11 @@ pub enum Transmit {
 
 pub struct Session {
     me: EndpointId,
+    name: String,
     topic: TopicId,
     rng: StdRng,
-    peers: HashSet<EndpointId>,
+    /// The other peers, by name.
+    peers: HashMap<EndpointId, String>,
     documents: HashMap<SharedId, SharedMeta>,
     replicas: HashMap<SharedId, Replica>,
     /// The owner and document of each snapshot we requested.
@@ -87,26 +89,28 @@ pub struct Session {
 
 impl Session {
     /// A new session with no peers
-    pub fn create(me: EndpointId, seed: u64) -> Self {
+    /// Without a name, peers see our short id.
+    pub fn create(me: EndpointId, name: Option<String>, seed: u64) -> Self {
         let mut rng = StdRng::seed_from_u64(seed);
         let topic = TopicId::from_bytes(rng.random());
         log::info!("created session {}", topic.fmt_short());
-        Self::new(me, topic, rng)
+        Self::new(me, name, topic, rng)
     }
 
-    pub fn join(me: EndpointId, topic: TopicId, seed: u64) -> Self {
+    pub fn join(me: EndpointId, name: Option<String>, topic: TopicId, seed: u64) -> Self {
         log::info!("joining session {}", topic.fmt_short());
-        let mut session = Self::new(me, topic, StdRng::seed_from_u64(seed));
+        let mut session = Self::new(me, name, topic, StdRng::seed_from_u64(seed));
         session.hello();
         session
     }
 
-    fn new(me: EndpointId, topic: TopicId, rng: StdRng) -> Self {
+    fn new(me: EndpointId, name: Option<String>, topic: TopicId, rng: StdRng) -> Self {
         Self {
             me,
+            name: name.unwrap_or_else(|| me.fmt_short().to_string()),
             topic,
             rng,
-            peers: HashSet::new(),
+            peers: HashMap::new(),
             documents: HashMap::new(),
             replicas: HashMap::new(),
             pending: HashMap::new(),
@@ -235,15 +239,15 @@ impl Session {
         };
 
         match message {
-            GossipMessage::Hello { peer, .. } => {
-                if self.peers.insert(peer) {
+            GossipMessage::Hello { peer, name, .. } => {
+                if self.peers.insert(peer, name).is_none() {
                     log::info!("{} joined", peer.fmt_short());
                     self.announce_owned();
                     self.hello();
                 }
             }
             GossipMessage::Bye { peer, .. } => {
-                if self.peers.remove(&peer) {
+                if self.peers.remove(&peer).is_some() {
                     log::info!("{} left", peer.fmt_short());
                 }
             }
@@ -358,6 +362,7 @@ impl Session {
     fn hello(&mut self) {
         let message = GossipMessage::Hello {
             peer: self.me,
+            name: self.name.clone(),
             nonce: self.rng.random(),
         };
         self.send(Channel::Topic(self.topic), &message);
@@ -402,9 +407,18 @@ impl Session {
         self.topic
     }
 
-    /// Everyone else in the session.
-    pub fn peers(&self) -> &HashSet<EndpointId> {
+    /// Everyone else in the session, by name.
+    pub fn peers(&self) -> &HashMap<EndpointId, String> {
         &self.peers
+    }
+
+    /// The name of any peer, or its short id until it says hello.
+    pub fn name(&self, peer: EndpointId) -> String {
+        if peer == self.me {
+            return self.name.clone();
+        }
+        let name = self.peers.get(&peer).cloned();
+        name.unwrap_or_else(|| peer.fmt_short().to_string())
     }
 
     pub fn documents(&self) -> &HashMap<SharedId, SharedMeta> {

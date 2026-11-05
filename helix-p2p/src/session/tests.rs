@@ -86,7 +86,7 @@ struct Network {
 impl Network {
     fn join(&mut self) -> EndpointId {
         let id = SecretKey::generate().public();
-        let session = Session::join(id, SESSION, rand::random());
+        let session = Session::join(id, None, SESSION, rand::random());
         self.peers.push(Peer {
             session,
             transport: PeerTransport {
