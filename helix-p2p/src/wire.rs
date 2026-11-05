@@ -43,7 +43,13 @@ pub enum GossipMessage {
     Unshare {
         id: SharedId,
     },
-    DocumentsRequest {
+    /// Sent on joining, and in reply to a peer we didn't know.
+    Hello {
+        peer: EndpointId,
+        nonce: u64,
+    },
+    Bye {
+        peer: EndpointId,
         nonce: u64,
     },
     Edit {

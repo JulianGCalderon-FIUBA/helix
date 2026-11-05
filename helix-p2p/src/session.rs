@@ -2,7 +2,7 @@
 //! It relies on the transport layer to communicate with peers.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
 };
 
@@ -76,6 +76,7 @@ pub struct Session {
     me: EndpointId,
     topic: TopicId,
     rng: StdRng,
+    peers: HashSet<EndpointId>,
     documents: HashMap<SharedId, SharedMeta>,
     replicas: HashMap<SharedId, Replica>,
     /// The owner and document of each snapshot we requested.
@@ -96,11 +97,7 @@ impl Session {
     pub fn join(me: EndpointId, topic: TopicId, seed: u64) -> Self {
         log::info!("joining session {}", topic.fmt_short());
         let mut session = Self::new(me, topic, StdRng::seed_from_u64(seed));
-        let nonce = session.rng.random();
-        session.send(
-            Channel::Topic(topic),
-            &GossipMessage::DocumentsRequest { nonce },
-        );
+        session.hello();
         session
     }
 
@@ -109,6 +106,7 @@ impl Session {
             me,
             topic,
             rng,
+            peers: HashSet::new(),
             documents: HashMap::new(),
             replicas: HashMap::new(),
             pending: HashMap::new(),
@@ -213,6 +211,11 @@ impl Session {
             log::info!("unsharing {}", id.fmt_short());
             self.send(Channel::Topic(self.topic), &GossipMessage::Unshare { id });
         }
+        let bye = GossipMessage::Bye {
+            peer: self.me,
+            nonce: self.rng.random(),
+        };
+        self.send(Channel::Topic(self.topic), &bye);
         self.transmits.into_iter()
     }
 
@@ -232,7 +235,18 @@ impl Session {
         };
 
         match message {
-            GossipMessage::DocumentsRequest { .. } => self.announce_owned(),
+            GossipMessage::Hello { peer, .. } => {
+                if self.peers.insert(peer) {
+                    log::info!("{} joined", peer.fmt_short());
+                    self.announce_owned();
+                    self.hello();
+                }
+            }
+            GossipMessage::Bye { peer, .. } => {
+                if self.peers.remove(&peer) {
+                    log::info!("{} left", peer.fmt_short());
+                }
+            }
             GossipMessage::Share {
                 id, owner, path, ..
             } => {
@@ -341,6 +355,14 @@ impl Session {
         self.replicas.remove(&id).is_some()
     }
 
+    fn hello(&mut self) {
+        let message = GossipMessage::Hello {
+            peer: self.me,
+            nonce: self.rng.random(),
+        };
+        self.send(Channel::Topic(self.topic), &message);
+    }
+
     fn announce_owned(&mut self) {
         let owned: Vec<_> = self
             .documents
@@ -378,6 +400,11 @@ impl Session {
 
     pub fn topic(&self) -> TopicId {
         self.topic
+    }
+
+    /// Everyone else in the session.
+    pub fn peers(&self) -> &HashSet<EndpointId> {
+        &self.peers
     }
 
     pub fn documents(&self) -> &HashMap<SharedId, SharedMeta> {
