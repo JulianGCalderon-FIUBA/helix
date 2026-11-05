@@ -12,7 +12,7 @@ use helix_core::{Change, ChangeSet, Rope};
 use iroh_tickets::ParseError;
 pub use iroh_tickets::Ticket;
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
     crdt::Replica,
@@ -218,32 +218,30 @@ impl Session {
 
     /// Receive data from the network layer
     pub fn receive(&mut self, channel: Channel, message: &[u8]) {
-        let topic = match channel {
-            Channel::Peer(peer) => return self.receive_from_peer(peer, message),
-            Channel::Topic(topic) => topic,
+        match channel {
+            Channel::Peer(peer) => self.receive_from_peer(peer, message),
+            Channel::Topic(topic) if topic == self.topic => self.receive_from_session(message),
+            // Any other topic is a document's, or an old session's.
+            Channel::Topic(topic) => self.receive_from_document(SharedId::from(topic), message),
+        }
+    }
+
+    fn receive_from_session(&mut self, message: &[u8]) {
+        let Some(message) = decode(message) else {
+            return;
         };
 
-        let message: GossipMessage = match wire::decode(message) {
-            Ok(message) => message,
-            Err(err) => {
-                log::warn!("dropping malformed message: {err:#}");
-                return;
-            }
-        };
-
-        // Any other topic is a document's, or an old session's.
-        let in_session = topic == self.topic;
         match message {
-            GossipMessage::DocumentsRequest { .. } if in_session => self.announce_owned(),
+            GossipMessage::DocumentsRequest { .. } => self.announce_owned(),
             GossipMessage::Share {
                 id, owner, path, ..
-            } if in_session => {
+            } => {
                 let meta = SharedMeta { id, owner, path };
                 if self.documents.insert(id, meta).is_none() {
                     log::info!("{} shared {}", owner.fmt_short(), id.fmt_short());
                 }
             }
-            GossipMessage::Unshare { id } if in_session => {
+            GossipMessage::Unshare { id } => {
                 if let Some(meta) = self.documents.remove(&id) {
                     log::info!("{} unshared {}", meta.owner.fmt_short(), id.fmt_short());
                 }
@@ -255,20 +253,24 @@ impl Session {
                     });
                 }
             }
-            GossipMessage::Edit { update } if !in_session => {
-                self.remote_change(SharedId::from(topic), &update)
-            }
-            _ => log::warn!("dropping message sent to the wrong channel: {channel}"),
+            GossipMessage::Edit { .. } => log::warn!("dropping edit sent to the session"),
+        }
+    }
+
+    fn receive_from_document(&mut self, id: SharedId, message: &[u8]) {
+        let Some(message) = decode(message) else {
+            return;
+        };
+
+        match message {
+            GossipMessage::Edit { update } => self.remote_change(id, &update),
+            _ => log::warn!("dropping session message sent to {}", id.fmt_short()),
         }
     }
 
     fn receive_from_peer(&mut self, peer: EndpointId, message: &[u8]) {
-        let message = match wire::decode(message) {
-            Ok(message) => message,
-            Err(err) => {
-                log::warn!("dropping malformed message: {err:#}");
-                return;
-            }
+        let Some(message) = decode(message) else {
+            return;
         };
 
         match message {
@@ -387,6 +389,12 @@ impl Session {
             .get(&id)
             .is_some_and(|meta| meta.owner == self.me)
     }
+}
+
+fn decode<T: DeserializeOwned>(message: &[u8]) -> Option<T> {
+    wire::decode(message)
+        .inspect_err(|err| log::warn!("dropping malformed message: {err:#}"))
+        .ok()
 }
 
 #[cfg(test)]
