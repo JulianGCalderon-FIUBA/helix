@@ -75,6 +75,7 @@ impl Peer {
                     self.buffers.insert(id, Rope::from(text));
                 }
                 Event::Unshared { id, reason } => self.unshared.push((id, reason)),
+                Event::Joined { .. } | Event::Left { .. } => {}
             }
         }
     }

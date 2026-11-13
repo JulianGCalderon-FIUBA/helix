@@ -63,6 +63,8 @@ pub enum Event {
     Changes { id: SharedId, changes: Vec<Change> },
     Reset { id: SharedId, text: String },
     Unshared { id: SharedId, reason: String },
+    Joined { name: String },
+    Left { name: String },
 }
 
 /// What the transport must do.
@@ -249,15 +251,17 @@ impl Session {
 
         match message {
             GossipMessage::Hello { peer, name, .. } => {
-                if self.peers.insert(peer, name).is_none() {
+                if self.peers.insert(peer, name.clone()).is_none() {
                     log::info!("{} joined", peer.fmt_short());
+                    self.events.push_back(Event::Joined { name });
                     self.announce_owned();
                     self.hello();
                 }
             }
             GossipMessage::Bye { peer, .. } => {
-                if self.peers.remove(&peer).is_some() {
+                if let Some(name) = self.peers.remove(&peer) {
                     log::info!("{} left", peer.fmt_short());
+                    self.events.push_back(Event::Left { name });
                 }
             }
             GossipMessage::Share {

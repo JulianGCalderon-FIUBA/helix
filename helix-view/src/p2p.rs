@@ -365,6 +365,8 @@ impl Editor {
                 let name = doc.display_name().into_owned();
                 self.set_status(format!("stopped syncing {name}: {reason}"));
             }
+            Event::Joined { name } => self.set_status(format!("{name} joined")),
+            Event::Left { name } => self.set_status(format!("{name} left")),
         }
     }
 }
