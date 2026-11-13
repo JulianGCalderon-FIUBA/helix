@@ -684,13 +684,17 @@ impl EditorView {
         let current_doc = view!(editor).doc;
 
         for doc in editor.documents() {
-            let fname = doc
-                .path()
-                .unwrap_or(&scratch)
-                .file_name()
-                .unwrap_or_default()
-                .to_str()
-                .unwrap_or_default();
+            let fname = if editor.is_remote(doc) {
+                editor.remote_base_name(doc)
+            } else {
+                doc.path()
+                    .unwrap_or(&scratch)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            };
 
             let style = if current_doc == doc.id() {
                 bufferline_active
