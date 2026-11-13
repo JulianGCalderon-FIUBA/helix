@@ -3332,8 +3332,8 @@ fn buffer_picker(cx: &mut Context) {
 
     let new_meta = |doc: &Document| BufferMeta {
         id: doc.id(),
-        path: if let Some(name) = cx.editor.remote_full_name(doc) {
-            Some(Cow::Owned(name.into()))
+        path: if cx.editor.is_remote(doc) {
+            Some(Cow::Owned(cx.editor.remote_full_name(doc).into()))
         } else {
             doc.path()
                 .map(ToOwned::to_owned)

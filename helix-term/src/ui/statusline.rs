@@ -447,8 +447,8 @@ fn render_file_name<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    let title = if let Some(name) = context.editor.remote_full_name(context.doc) {
-        format!(" {name} ")
+    let title = if context.editor.is_remote(context.doc) {
+        format!(" {} ", context.editor.remote_full_name(context.doc))
     } else {
         let rel_path = context.doc.relative_path();
         let path = rel_path
@@ -465,8 +465,8 @@ fn render_file_absolute_path<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    let title = if let Some(name) = context.editor.remote_full_name(context.doc) {
-        format!(" {name} ")
+    let title = if context.editor.is_remote(context.doc) {
+        format!(" {} ", context.editor.remote_full_name(context.doc))
     } else {
         let path = context
             .doc
@@ -508,8 +508,8 @@ fn render_file_base_name<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    let title = if let Some(name) = context.editor.remote_base_name(context.doc) {
-        format!(" {name} ")
+    let title = if context.editor.is_remote(context.doc) {
+        format!(" {} ", context.editor.remote_base_name(context.doc))
     } else {
         let rel_path = context.doc.relative_path();
         let path = rel_path

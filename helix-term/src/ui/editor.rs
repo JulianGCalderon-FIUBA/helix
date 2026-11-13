@@ -684,8 +684,8 @@ impl EditorView {
         let current_doc = view!(editor).doc;
 
         for doc in editor.documents() {
-            let fname = if let Some(name) = editor.remote_base_name(doc) {
-                name
+            let fname = if editor.is_remote(doc) {
+                editor.remote_base_name(doc)
             } else {
                 doc.path()
                     .unwrap_or(&scratch)

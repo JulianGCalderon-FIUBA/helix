@@ -248,15 +248,19 @@ impl Editor {
         Ok(())
     }
 
-    pub fn remote_full_name(&self, doc: &Document) -> Option<String> {
-        let (owner, path) = self.remote_path(doc)?;
-        Some(format!("{owner}:{}", path.display()))
+    pub fn is_remote(&self, doc: &Document) -> bool {
+        self.remote_path(doc).is_some()
     }
 
-    pub fn remote_base_name(&self, doc: &Document) -> Option<String> {
-        let (owner, path) = self.remote_path(doc)?;
+    pub fn remote_full_name(&self, doc: &Document) -> String {
+        let (owner, path) = self.remote_path(doc).expect("buffer is not remote");
+        format!("{owner}:{}", path.display())
+    }
+
+    pub fn remote_base_name(&self, doc: &Document) -> String {
+        let (owner, path) = self.remote_path(doc).expect("buffer is not remote");
         let name = path.file_name().map_or(path, Path::new);
-        Some(format!("{owner}:{}", name.display()))
+        format!("{owner}:{}", name.display())
     }
 
     fn remote_path(&self, doc: &Document) -> Option<(String, &Path)> {
