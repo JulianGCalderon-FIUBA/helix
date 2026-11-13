@@ -335,10 +335,10 @@ impl Editor {
                 let view_id = self.get_synced_view_id(doc_id);
                 let doc = doc_mut!(self, &doc_id);
 
-                // Take the marker off while applying, so that the hook
-                // doesn't send the remote edit back out as a local one.
-                doc.shared = None;
                 let transaction = Transaction::change(doc.text(), changes.into_iter());
+
+                // So that the hook doesn't send the remote edit back out as a local one.
+                doc.shared = None;
                 doc.apply(&transaction, view_id);
                 doc.shared = Some(id);
             }
@@ -349,9 +349,11 @@ impl Editor {
                 let view_id = self.get_synced_view_id(doc_id);
                 let doc = doc_mut!(self, &doc_id);
 
-                doc.shared = None;
-                // Diffing keeps selections where the text didn't change.
+                // Keeps selections where the text didn't change.
                 let transaction = compare_ropes(doc.text(), &Rope::from(text));
+
+                // So that the hook doesn't send the remote edit back out as a local one.
+                doc.shared = None;
                 doc.apply(&transaction, view_id);
                 doc.shared = Some(id);
             }
