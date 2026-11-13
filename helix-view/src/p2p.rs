@@ -329,11 +329,31 @@ impl Editor {
     fn apply_session_event(&mut self, event: Event) {
         match event {
             Event::Changes { id, changes } => {
-                self.apply_remote(id, |text| Transaction::change(text, changes.into_iter()))
+                let Some(doc_id) = self.shared_document(id).map(Document::id) else {
+                    return;
+                };
+                let view_id = self.get_synced_view_id(doc_id);
+                let doc = doc_mut!(self, &doc_id);
+                let transaction = Transaction::change(doc.text(), changes.into_iter());
+
+                // Take the marker off while applying, so that the hook
+                // doesn't send the remote edit back out as a local one.
+                doc.shared = None;
+                doc.apply(&transaction, view_id);
+                doc.shared = Some(id);
             }
-            // Diffing keeps selections where the text didn't change.
             Event::Reset { id, text } => {
-                self.apply_remote(id, |old| compare_ropes(old, &Rope::from(text)))
+                let Some(doc_id) = self.shared_document(id).map(Document::id) else {
+                    return;
+                };
+                let view_id = self.get_synced_view_id(doc_id);
+                let doc = doc_mut!(self, &doc_id);
+                // Diffing keeps selections where the text didn't change.
+                let transaction = compare_ropes(doc.text(), &Rope::from(text));
+
+                doc.shared = None;
+                doc.apply(&transaction, view_id);
+                doc.shared = Some(id);
             }
             Event::Unshared { id, reason } => {
                 let Some(doc) = self.documents_mut().find(|doc| doc.shared == Some(id)) else {
@@ -344,19 +364,5 @@ impl Editor {
                 self.set_status(format!("stopped syncing {name}: {reason}"));
             }
         }
-    }
-
-    fn apply_remote(&mut self, id: SharedId, transaction: impl FnOnce(&Rope) -> Transaction) {
-        let Some(doc_id) = self.shared_document(id).map(Document::id) else {
-            return;
-        };
-        let view_id = self.get_synced_view_id(doc_id);
-        let doc = doc_mut!(self, &doc_id);
-
-        // Take the marker off while applying, so that the hook
-        // doesn't send the remote edit back out as a local one.
-        doc.shared = None;
-        doc.apply(&transaction(doc.text()), view_id);
-        doc.shared = Some(id);
     }
 }

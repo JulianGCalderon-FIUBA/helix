@@ -153,7 +153,7 @@ impl Session {
         Ok(())
     }
 
-    /// Asks the owner for a snapshot, which resets the buffer when it arrives.
+    /// Asks the owner for a snapshot.
     fn resync(&mut self, id: SharedId, owner: EndpointId) {
         let request = self.rng.random();
         self.pending.insert(request, (owner, id));
@@ -164,7 +164,7 @@ impl Session {
     }
 
     pub fn local_change(&mut self, id: SharedId, changes: &ChangeSet) {
-        // The snapshot will overwrite the buffer, and these edits with it.
+        // The snapshot would overwrite these edits.
         if self.syncing(id) {
             return;
         }
@@ -354,8 +354,7 @@ impl Session {
                 return;
             }
         };
-        // While syncing, the buffer may not match the replica. The snapshot's
-        // reset will carry these changes.
+        // The snapshot would carry these changes.
         if !changes.is_empty() && !self.syncing(id) {
             self.events.push_back(Event::Changes { id, changes });
         }
