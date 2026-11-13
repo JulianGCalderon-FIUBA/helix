@@ -61,6 +61,7 @@ impl SharedMeta {
 #[derive(Debug)]
 pub enum Event {
     Changes { id: SharedId, changes: Vec<Change> },
+    Reset { id: SharedId, text: String },
     Unshared { id: SharedId, reason: String },
 }
 
@@ -148,17 +149,25 @@ impl Session {
         self.replicas.insert(id, Replica::empty());
         self.transmits
             .push_back(Transmit::Subscribe(id.topic(), vec![owner]));
+        self.resync(id, owner);
+        Ok(())
+    }
 
+    /// Asks the owner for a snapshot.
+    fn resync(&mut self, id: SharedId, owner: EndpointId) {
         let request = self.rng.random();
         self.pending.insert(request, (owner, id));
         self.send(
             Channel::Peer(owner),
             &PeerMessage::SnapshotRequest { request, id },
         );
-        Ok(())
     }
 
     pub fn local_change(&mut self, id: SharedId, changes: &ChangeSet) {
+        // The snapshot would overwrite these edits.
+        if self.syncing(id) {
+            return;
+        }
         let Some(replica) = self.replicas.get_mut(&id) else {
             return;
         };
@@ -304,7 +313,7 @@ impl Session {
                     return;
                 };
                 match replica {
-                    Ok(replica) => self.remote_change(id, &replica),
+                    Ok(replica) => self.load_snapshot(id, &replica),
                     Err(reason) => {
                         log::warn!(
                             "{} refused snapshot of {}: {reason}",
@@ -345,9 +354,22 @@ impl Session {
                 return;
             }
         };
-        if !changes.is_empty() {
+        // The snapshot would carry these changes.
+        if !changes.is_empty() && !self.syncing(id) {
             self.events.push_back(Event::Changes { id, changes });
         }
+    }
+
+    fn load_snapshot(&mut self, id: SharedId, snapshot: &[u8]) {
+        let Some(replica) = self.replicas.get_mut(&id) else {
+            return;
+        };
+        if let Err(err) = replica.from_remote(snapshot) {
+            log::warn!("dropping snapshot of {}: {err:#}", id.fmt_short());
+            return;
+        }
+        let text = replica.text();
+        self.events.push_back(Event::Reset { id, text });
     }
 
     fn unsync(&mut self, id: SharedId) -> bool {
@@ -421,6 +443,10 @@ impl Session {
 
     pub fn documents(&self) -> &HashMap<SharedId, SharedMeta> {
         &self.documents
+    }
+
+    fn syncing(&self, id: SharedId) -> bool {
+        self.pending.values().any(|(_, pending)| *pending == id)
     }
 
     pub fn owns(&self, id: SharedId) -> bool {

@@ -71,6 +71,9 @@ impl Peer {
                     let buffer = self.buffers.get_mut(&id).unwrap();
                     Transaction::change(buffer, changes.into_iter()).apply(buffer);
                 }
+                Event::Reset { id, text } => {
+                    self.buffers.insert(id, Rope::from(text));
+                }
                 Event::Unshared { id, reason } => self.unshared.push((id, reason)),
             }
         }
@@ -265,6 +268,23 @@ fn edits_while_opening_are_not_lost() {
 }
 
 #[test]
+fn guest_edits_while_opening_are_discarded() {
+    let mut net = Network::default();
+    let owner = net.join();
+    let guest = net.join();
+    let id = net.peer(owner).share("hello");
+    net.flush();
+
+    // The snapshot overwrites the edit, so it must not reach the owner either.
+    net.peer(guest).open(id);
+    net.peer(guest).insert(id, 0, "x");
+    net.flush();
+
+    assert_eq!(net.peer(guest).text(id), "hello");
+    assert_eq!(net.peer(owner).text(id), "hello");
+}
+
+#[test]
 fn closing_an_owned_document_unshares_it() {
     let mut net = Network::default();
     let owner = net.join();
@@ -412,7 +432,6 @@ fn malformed_messages_are_dropped() {
 }
 
 #[test]
-#[ignore = "#65"]
 fn opening_into_a_new_buffer_fetches_the_owner_text() {
     let mut net = Network::default();
     let owner = net.join();
