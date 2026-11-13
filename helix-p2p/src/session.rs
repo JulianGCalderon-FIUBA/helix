@@ -57,8 +57,7 @@ impl SharedMeta {
     }
 }
 
-/// What the session tells the driver. `Reset` carries the whole text,
-/// replacing whatever the buffer holds.
+/// What the session tells the driver.
 #[derive(Debug)]
 pub enum Event {
     Changes { id: SharedId, changes: Vec<Change> },
