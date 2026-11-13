@@ -71,7 +71,7 @@ impl Peer {
                     let buffer = self.buffers.get_mut(&id).unwrap();
                     Transaction::change(buffer, changes.into_iter()).apply(buffer);
                 }
-                Event::Opened { id, text } => {
+                Event::Reset { id, text } => {
                     self.buffers.insert(id, Rope::from(text));
                 }
                 Event::Unshared { id, reason } => self.unshared.push((id, reason)),

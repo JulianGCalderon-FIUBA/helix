@@ -3,7 +3,7 @@
 use std::{future::Future, iter, path::Path};
 
 use anyhow::{ensure, Context, Result};
-use helix_core::{Change, ChangeSet, Transaction};
+use helix_core::{diff::compare_ropes, ChangeSet, Rope, Transaction};
 use helix_event::register_hook;
 use helix_p2p::{
     net::{self, Channel, Service},
@@ -328,13 +328,12 @@ impl Editor {
 
     fn apply_session_event(&mut self, event: Event) {
         match event {
-            Event::Changes { id, changes } => self.apply_remote_changes(id, changes),
-            Event::Opened { id, text } => {
-                let Some(doc) = self.shared_document(id) else {
-                    return;
-                };
-                let len = doc.text().len_chars();
-                self.apply_remote_changes(id, vec![(0, len, Some(text.into()))]);
+            Event::Changes { id, changes } => {
+                self.apply_remote(id, |text| Transaction::change(text, changes.into_iter()))
+            }
+            // Diffing keeps selections where the text didn't change.
+            Event::Reset { id, text } => {
+                self.apply_remote(id, |old| compare_ropes(old, &Rope::from(text)))
             }
             Event::Unshared { id, reason } => {
                 let Some(doc) = self.documents_mut().find(|doc| doc.shared == Some(id)) else {
@@ -347,7 +346,7 @@ impl Editor {
         }
     }
 
-    fn apply_remote_changes(&mut self, id: SharedId, changes: Vec<Change>) {
+    fn apply_remote(&mut self, id: SharedId, transaction: impl FnOnce(&Rope) -> Transaction) {
         let Some(doc_id) = self.shared_document(id).map(Document::id) else {
             return;
         };
@@ -357,8 +356,7 @@ impl Editor {
         // Take the marker off while applying, so that the hook
         // doesn't send the remote edit back out as a local one.
         doc.shared = None;
-        let transaction = Transaction::change(doc.text(), changes.into_iter());
-        doc.apply(&transaction, view_id);
+        doc.apply(&transaction(doc.text()), view_id);
         doc.shared = Some(id);
     }
 }

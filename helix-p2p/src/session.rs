@@ -57,12 +57,12 @@ impl SharedMeta {
     }
 }
 
-/// What the session tells the driver. `Opened` carries the whole text,
+/// What the session tells the driver. `Reset` carries the whole text,
 /// replacing whatever the buffer holds.
 #[derive(Debug)]
 pub enum Event {
     Changes { id: SharedId, changes: Vec<Change> },
-    Opened { id: SharedId, text: String },
+    Reset { id: SharedId, text: String },
     Unshared { id: SharedId, reason: String },
 }
 
@@ -150,17 +150,25 @@ impl Session {
         self.replicas.insert(id, Replica::empty());
         self.transmits
             .push_back(Transmit::Subscribe(id.topic(), vec![owner]));
+        self.resync(id, owner);
+        Ok(())
+    }
 
+    /// Asks the owner for a snapshot, which resets the buffer when it arrives.
+    fn resync(&mut self, id: SharedId, owner: EndpointId) {
         let request = self.rng.random();
         self.pending.insert(request, (owner, id));
         self.send(
             Channel::Peer(owner),
             &PeerMessage::SnapshotRequest { request, id },
         );
-        Ok(())
     }
 
     pub fn local_change(&mut self, id: SharedId, changes: &ChangeSet) {
+        // The snapshot will overwrite the buffer, and these edits with it.
+        if self.syncing(id) {
+            return;
+        }
         let Some(replica) = self.replicas.get_mut(&id) else {
             return;
         };
@@ -347,7 +355,9 @@ impl Session {
                 return;
             }
         };
-        if !changes.is_empty() {
+        // While syncing, the buffer may not match the replica. The snapshot's
+        // reset will carry these changes.
+        if !changes.is_empty() && !self.syncing(id) {
             self.events.push_back(Event::Changes { id, changes });
         }
     }
@@ -361,7 +371,7 @@ impl Session {
             return;
         }
         let text = replica.text();
-        self.events.push_back(Event::Opened { id, text });
+        self.events.push_back(Event::Reset { id, text });
     }
 
     fn unsync(&mut self, id: SharedId) -> bool {
@@ -435,6 +445,10 @@ impl Session {
 
     pub fn documents(&self) -> &HashMap<SharedId, SharedMeta> {
         &self.documents
+    }
+
+    fn syncing(&self, id: SharedId) -> bool {
+        self.pending.values().any(|(_, pending)| *pending == id)
     }
 
     pub fn owns(&self, id: SharedId) -> bool {
