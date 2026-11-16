@@ -20,6 +20,8 @@ use crate::{
     wire::{self, GossipMessage, Location, PeerMessage, SharedId},
 };
 
+pub type Cursor = usize;
+
 /// An invitation into a session. Any member can hand one out.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionTicket {
@@ -84,7 +86,7 @@ pub struct Session {
     peers: HashMap<EndpointId, String>,
     peer_focus: HashMap<EndpointId, Location>,
     /// What we last told peers about our own focus.
-    focus: Option<(SharedId, usize, Selection)>,
+    focus: Option<(SharedId, Cursor, Selection)>,
     documents: HashMap<SharedId, SharedMeta>,
     replicas: HashMap<SharedId, Replica>,
     /// The owner and document of each snapshot we requested.
@@ -183,7 +185,7 @@ impl Session {
     }
 
     /// The cursor needs the buffer's graphemes, so the caller finds it.
-    pub fn update_focus(&mut self, focus: Option<(SharedId, usize, Selection)>) {
+    pub fn update_focus(&mut self, focus: Option<(SharedId, Cursor, Selection)>) {
         // The replica is empty until the snapshot arrives.
         if focus.as_ref().is_some_and(|(id, ..)| self.syncing(*id)) {
             return;
@@ -500,7 +502,7 @@ impl Session {
         name.unwrap_or_else(|| peer.fmt_short().to_string())
     }
 
-    pub fn peer_focus(&self, peer: EndpointId) -> Option<(SharedId, Option<usize>)> {
+    pub fn peer_focus(&self, peer: EndpointId) -> Option<(SharedId, Option<Cursor>)> {
         let location = self.peer_focus.get(&peer)?;
         let replica = self.synced_replica(location.id);
         Some((
