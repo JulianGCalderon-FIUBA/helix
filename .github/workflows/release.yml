@@ -172,7 +172,9 @@ jobs:
 
       - name: Install cargo-deb
         if: matrix.build == 'x86_64-linux'
-        run: cargo install cargo-deb --version 3.7.0 --locked
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-deb
 
       - name: Build Deb
         shell: bash
