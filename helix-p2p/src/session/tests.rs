@@ -448,3 +448,121 @@ fn opening_into_a_new_buffer_fetches_the_owner_text() {
 
     assert_eq!(net.peer(guest).text(id), "hello");
 }
+
+#[test]
+fn peers_see_where_others_are() {
+    let mut net = Network::default();
+    let owner = net.join();
+    let guest = net.join();
+    let id = net.peer(owner).share("hello");
+    net.flush();
+    net.peer(guest).open(id);
+    net.flush();
+
+    net.peer(owner).session.local_focus(Some((id, 2)));
+    net.flush();
+
+    assert_eq!(
+        net.peer(guest).session.peer_focus(owner),
+        Some((id, Some(2)))
+    );
+}
+
+#[test]
+fn focus_follows_edits() {
+    let mut net = Network::default();
+    let owner = net.join();
+    let guest = net.join();
+    let id = net.peer(owner).share("hello");
+    net.flush();
+    net.peer(guest).open(id);
+    net.flush();
+
+    net.peer(owner).session.local_focus(Some((id, 2)));
+    net.peer(guest).insert(id, 0, "> ");
+    net.flush();
+
+    assert_eq!(
+        net.peer(guest).session.peer_focus(owner),
+        Some((id, Some(4)))
+    );
+}
+
+#[test]
+fn focus_in_an_unopened_document_has_no_position() {
+    let mut net = Network::default();
+    let owner = net.join();
+    let guest = net.join();
+    let id = net.peer(owner).share("hello");
+    net.flush();
+
+    net.peer(owner).session.local_focus(Some((id, 2)));
+    net.flush();
+
+    assert_eq!(net.peer(guest).session.peer_focus(owner), Some((id, None)));
+}
+
+#[test]
+fn late_joiner_learns_focus() {
+    let mut net = Network::default();
+    let owner = net.join();
+    let id = net.peer(owner).share("hello");
+    net.peer(owner).session.local_focus(Some((id, 2)));
+    net.flush();
+
+    let guest = net.join();
+    net.flush();
+
+    assert_eq!(net.peer(guest).session.peer_focus(owner), Some((id, None)));
+}
+
+#[test]
+fn focus_is_not_sent_while_opening() {
+    let mut net = Network::default();
+    let owner = net.join();
+    let guest = net.join();
+    let id = net.peer(owner).share("hello");
+    net.flush();
+
+    net.peer(guest).open(id);
+    net.peer(guest).session.local_focus(Some((id, 2)));
+    net.flush();
+    assert_eq!(net.peer(owner).session.peer_focus(guest), None);
+
+    net.peer(guest).session.local_focus(Some((id, 2)));
+    net.flush();
+    assert_eq!(
+        net.peer(owner).session.peer_focus(guest),
+        Some((id, Some(2)))
+    );
+}
+
+#[test]
+fn leaving_a_shared_buffer_clears_focus() {
+    let mut net = Network::default();
+    let owner = net.join();
+    let guest = net.join();
+    let id = net.peer(owner).share("hello");
+    net.peer(owner).session.local_focus(Some((id, 2)));
+    net.flush();
+
+    net.peer(owner).session.local_focus(None);
+    net.flush();
+
+    assert_eq!(net.peer(guest).session.peer_focus(owner), None);
+}
+
+#[test]
+fn leaving_the_session_clears_focus() {
+    let mut net = Network::default();
+    let owner = net.join();
+    let guest = net.join();
+    let id = net.peer(owner).share("hello");
+    net.peer(owner).session.local_focus(Some((id, 2)));
+    net.flush();
+
+    net.leave(owner);
+    net.flush();
+
+    assert_eq!(net.peer(guest).session.peer_focus(owner), None);
+}
