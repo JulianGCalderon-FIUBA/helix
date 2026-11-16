@@ -144,6 +144,7 @@ impl EditorView {
         }
 
         Self::doc_diagnostics_highlights_into(doc, theme, &mut overlays);
+        Self::doc_peer_selection_highlights_into(editor, doc, theme, &mut overlays);
 
         if is_focused {
             if config.lsp.auto_document_highlight {
@@ -525,6 +526,37 @@ impl EditorView {
         }
 
         Some(OverlayHighlights::Homogeneous { highlight, ranges })
+    }
+
+    /// Get highlight spans for the selections of peers in a shared document.
+    pub fn doc_peer_selection_highlights_into(
+        editor: &Editor,
+        doc: &Document,
+        theme: &Theme,
+        overlays: &mut Vec<OverlayHighlights>,
+    ) {
+        let (Some(id), Ok(session)) = (doc.shared, editor.session()) else {
+            return;
+        };
+        let text = doc.text().slice(..);
+        let len = text.len_chars();
+        for (peer, selection) in session.peer_selections(id) {
+            // Every editor picks the same colour for the same peer.
+            let color = peer.as_bytes()[0] as usize % theme.rainbow_length().max(1);
+            let Some(highlight) = theme.find_highlight_exact(&format!("peer.{color}")) else {
+                continue;
+            };
+            let ranges = selection.iter().map(|range| {
+                // The buffer may have drifted from the replica (#76).
+                let range = Range::new(range.anchor.min(len), range.head.min(len));
+                let range = range.min_width_1(text);
+                range.from()..range.to()
+            });
+            overlays.push(OverlayHighlights::Homogeneous {
+                highlight,
+                ranges: ranges.collect(),
+            });
+        }
     }
 
     /// Get highlight spans for selections in a document view.
