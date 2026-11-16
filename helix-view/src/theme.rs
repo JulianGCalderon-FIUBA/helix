@@ -358,7 +358,6 @@ fn build_theme_values(
         rainbow_length += 1;
     }
 
-    // Rainbow brackets find their colours by index, so these go after them.
     for (i, style) in rainbow.iter().enumerate() {
         let name = format!("peer.{i}");
         let style = Style {
