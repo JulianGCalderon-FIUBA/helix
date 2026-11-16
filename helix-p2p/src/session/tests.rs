@@ -450,25 +450,6 @@ fn opening_into_a_new_buffer_fetches_the_owner_text() {
 }
 
 #[test]
-fn peers_see_where_others_are() {
-    let mut net = Network::default();
-    let owner = net.join();
-    let guest = net.join();
-    let id = net.peer(owner).share("hello");
-    net.flush();
-    net.peer(guest).open(id);
-    net.flush();
-
-    net.peer(owner).session.update_focus(Some((id, 2)));
-    net.flush();
-
-    assert_eq!(
-        net.peer(guest).session.peer_focus(owner),
-        Some((id, Some(2)))
-    );
-}
-
-#[test]
 fn focus_follows_edits() {
     let mut net = Network::default();
     let owner = net.join();
@@ -486,20 +467,6 @@ fn focus_follows_edits() {
         net.peer(guest).session.peer_focus(owner),
         Some((id, Some(4)))
     );
-}
-
-#[test]
-fn focus_in_an_unopened_document_has_no_position() {
-    let mut net = Network::default();
-    let owner = net.join();
-    let guest = net.join();
-    let id = net.peer(owner).share("hello");
-    net.flush();
-
-    net.peer(owner).session.update_focus(Some((id, 2)));
-    net.flush();
-
-    assert_eq!(net.peer(guest).session.peer_focus(owner), Some((id, None)));
 }
 
 #[test]

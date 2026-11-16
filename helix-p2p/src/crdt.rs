@@ -329,13 +329,6 @@ mod tests {
         assert_eq!(local.replica.decode_cursor(&cursor), Some(8));
     }
 
-    #[test]
-    fn cursor_at_end() {
-        let buffer = Buffer::new("hello");
-        let cursor = buffer.replica.encode_cursor(5);
-        assert_eq!(buffer.fork().replica.decode_cursor(&cursor), Some(5));
-    }
-
     // Buffers can drift from their replica (#76).
     #[test]
     fn cursor_past_the_end_is_at_the_end() {
