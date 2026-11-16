@@ -1,8 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Context as _;
 use helix_p2p::{net::EndpointId, session::SharedMeta};
-use helix_view::{doc, document::SCRATCH_BUFFER_NAME, Editor};
+use helix_view::{doc, Editor};
 
 use crate::{
     compositor::Compositor,
@@ -100,19 +100,15 @@ pub fn session_file_picker(cx: &mut Context) {
 
 /// Opens a picker of the other peers in the session.
 pub fn session_peer_picker(cx: &mut Context) {
-    // Each peer's name with the file they're in, as owner:path.
+    // Each peer's name with the file they're in.
     let items: Vec<(EndpointId, String, Option<PathBuf>)> = match cx.editor.session() {
         Ok(session) => session
             .peers()
             .iter()
             .map(|(&peer, name)| {
                 let (id, _) = session.peer_focus(peer).unzip();
-                let file = id.and_then(|id| session.documents().get(&id)).map(|meta| {
-                    let path = meta.path.as_deref();
-                    let path = path.unwrap_or(Path::new(SCRATCH_BUFFER_NAME));
-                    format!("{}:{}", session.name(meta.owner), path.display()).into()
-                });
-                (peer, name.clone(), file)
+                let file = id.and_then(|id| cx.editor.shared_full_name(id));
+                (peer, name.clone(), file.map(PathBuf::from))
             })
             .collect(),
         Err(err) => return cx.editor.set_error(err.to_string()),

@@ -279,12 +279,22 @@ impl Editor {
         format!("{owner}:{}", name.display())
     }
 
+    pub fn shared_full_name(&self, id: SharedId) -> Option<String> {
+        let (owner, path) = self.shared_path(id)?;
+        Some(format!("{owner}:{}", path.display()))
+    }
+
     fn remote_path(&self, doc: &Document) -> Option<(String, &Path)> {
-        let session = self.session().ok()?;
-        let meta = session.documents().get(&doc.shared?)?;
-        if session.owns(meta.id) {
+        let id = doc.shared?;
+        if self.session().ok()?.owns(id) {
             return None;
         }
+        self.shared_path(id)
+    }
+
+    fn shared_path(&self, id: SharedId) -> Option<(String, &Path)> {
+        let session = self.session().ok()?;
+        let meta = session.documents().get(&id)?;
         let path = meta.path.as_deref();
         Some((
             session.name(meta.owner),
