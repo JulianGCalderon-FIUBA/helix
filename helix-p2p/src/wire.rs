@@ -52,6 +52,11 @@ pub enum GossipMessage {
         peer: EndpointId,
         nonce: u64,
     },
+    Focus {
+        peer: EndpointId,
+        location: Option<(SharedId, Vec<u8>)>,
+        nonce: u64,
+    },
     Edit {
         update: Vec<u8>,
     },

@@ -82,6 +82,10 @@ pub struct Session {
     rng: StdRng,
     /// The other peers, by name.
     peers: HashMap<EndpointId, String>,
+    /// The document each peer is in, with a replica cursor.
+    peer_focus: HashMap<EndpointId, (SharedId, Vec<u8>)>,
+    /// What we last told peers about our own focus.
+    focus: Option<(SharedId, usize)>,
     documents: HashMap<SharedId, SharedMeta>,
     replicas: HashMap<SharedId, Replica>,
     /// The owner and document of each snapshot we requested.
@@ -114,6 +118,8 @@ impl Session {
             topic,
             rng,
             peers: HashMap::new(),
+            peer_focus: HashMap::new(),
+            focus: None,
             documents: HashMap::new(),
             replicas: HashMap::new(),
             pending: HashMap::new(),
@@ -175,6 +181,18 @@ impl Session {
         };
         let update = replica.from_local(changes);
         self.send(Channel::Topic(id.topic()), &GossipMessage::Edit { update });
+    }
+
+    pub fn update_focus(&mut self, focus: Option<(SharedId, usize)>) {
+        // The replica is empty until the snapshot arrives.
+        if focus.is_some_and(|(id, _)| self.syncing(id)) {
+            return;
+        }
+        if focus == self.focus {
+            return;
+        }
+        self.focus = focus;
+        self.send_focus();
     }
 
     pub fn close(&mut self, id: SharedId) {
@@ -256,13 +274,29 @@ impl Session {
                     self.events.push_back(Event::Joined { name });
                     self.announce_owned();
                     self.hello();
+                    self.send_focus();
                 }
             }
             GossipMessage::Bye { peer, .. } => {
+                self.peer_focus.remove(&peer);
                 if let Some(name) = self.peers.remove(&peer) {
                     log::info!("{} left", peer.fmt_short());
                     self.events.push_back(Event::Left { name });
                 }
+            }
+            GossipMessage::Focus {
+                peer,
+                location: Some(location),
+                ..
+            } => {
+                self.peer_focus.insert(peer, location);
+            }
+            GossipMessage::Focus {
+                peer,
+                location: None,
+                ..
+            } => {
+                self.peer_focus.remove(&peer);
             }
             GossipMessage::Share {
                 id, owner, path, ..
@@ -394,6 +428,19 @@ impl Session {
         self.send(Channel::Topic(self.topic), &message);
     }
 
+    fn send_focus(&mut self) {
+        let location = self.focus.and_then(|(id, pos)| {
+            let replica = self.replicas.get(&id)?;
+            Some((id, replica.encode_cursor(pos)))
+        });
+        let message = GossipMessage::Focus {
+            peer: self.me,
+            location,
+            nonce: self.rng.random(),
+        };
+        self.send(Channel::Topic(self.topic), &message);
+    }
+
     fn announce_owned(&mut self) {
         let owned: Vec<_> = self
             .documents
@@ -443,6 +490,15 @@ impl Session {
         }
         let name = self.peers.get(&peer).cloned();
         name.unwrap_or_else(|| peer.fmt_short().to_string())
+    }
+
+    pub fn peer_focus(&self, peer: EndpointId) -> Option<(SharedId, Option<usize>)> {
+        let (id, cursor) = self.peer_focus.get(&peer)?;
+        let replica = self.replicas.get(id).filter(|_| !self.syncing(*id));
+        Some((
+            *id,
+            replica.and_then(|replica| replica.decode_cursor(cursor)),
+        ))
     }
 
     pub fn documents(&self) -> &HashMap<SharedId, SharedMeta> {

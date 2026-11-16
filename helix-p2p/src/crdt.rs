@@ -2,7 +2,11 @@
 
 use anyhow::Result;
 use helix_core::{Change, ChangeSet, Operation, Rope};
-use loro::{event::Diff, ExportMode, LoroDoc, LoroText, TextDelta};
+use loro::{
+    cursor::{Cursor, Side},
+    event::Diff,
+    ExportMode, LoroDoc, LoroText, TextDelta,
+};
 
 const TEXT_ID: &str = "text";
 
@@ -43,6 +47,17 @@ impl Replica {
         self.doc
             .export(ExportMode::Snapshot)
             .expect("export should not fail")
+    }
+
+    pub fn encode_cursor(&self, pos: usize) -> Vec<u8> {
+        let cursor = self.text.get_cursor(pos, Side::Middle);
+        cursor.expect("cursor should be in bounds").encode()
+    }
+
+    /// None until the edit it points into arrives.
+    pub fn decode_cursor(&self, cursor: &[u8]) -> Option<usize> {
+        let cursor = Cursor::decode(cursor).ok()?;
+        Some(self.doc.get_cursor_pos(&cursor).ok()?.current.pos)
     }
 
     /// Translate local transactions to a CRDT update.
@@ -299,5 +314,44 @@ mod tests {
         remote.receive(&update);
 
         assert!(remote.replica.from_remote(&update).unwrap().is_empty());
+    }
+
+    #[test]
+    fn cursor_follows_remote_edits() {
+        let mut local = Buffer::new("hello world");
+        let mut remote = local.fork();
+
+        let cursor = local.replica.encode_cursor(6);
+        let update = remote.edit(vec![(0, 0, Some("> ".into()))]);
+        local.receive(&update);
+
+        assert_eq!(remote.replica.decode_cursor(&cursor), Some(8));
+        assert_eq!(local.replica.decode_cursor(&cursor), Some(8));
+    }
+
+    // Buffers can drift from their replica (#76).
+    #[test]
+    fn cursor_past_the_end_is_at_the_end() {
+        let buffer = Buffer::new("hello");
+        let cursor = buffer.replica.encode_cursor(10);
+        assert_eq!(buffer.replica.decode_cursor(&cursor), Some(5));
+    }
+
+    #[test]
+    fn cursor_in_empty_text() {
+        let buffer = Buffer::new("");
+        let cursor = buffer.replica.encode_cursor(0);
+        assert_eq!(buffer.fork().replica.decode_cursor(&cursor), Some(0));
+    }
+
+    #[test]
+    fn cursor_into_unseen_edit_is_unresolved() {
+        let mut local = Buffer::new("");
+        let remote = local.fork();
+
+        local.edit(vec![(0, 0, Some("hello".into()))]);
+        let cursor = local.replica.encode_cursor(2);
+
+        assert_eq!(remote.replica.decode_cursor(&cursor), None);
     }
 }
