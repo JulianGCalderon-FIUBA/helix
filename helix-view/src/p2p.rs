@@ -357,26 +357,29 @@ impl Editor {
         let (id, _) = session
             .peer_focus(peer)
             .with_context(|| format!("{} is not in a shared buffer", session.name(peer)))?;
+        let opening = self.shared_document(id).is_none();
         self.open_shared_document(id, action)?;
-        let moved = self.move_to_peer(peer);
-        self.p2p_mut()?.pending_jump = (!moved).then_some((id, peer));
+        // An opening buffer is empty until its snapshot arrives.
+        self.p2p_mut()?.pending_jump = opening.then_some((id, peer));
+        if !opening {
+            self.move_to_peer(peer);
+        }
         Ok(())
     }
 
     /// Moves the cursor to the peer's, if the focused buffer is theirs.
-    fn move_to_peer(&mut self, peer: EndpointId) -> bool {
+    fn move_to_peer(&mut self, peer: EndpointId) {
         let Some((id, Some(pos))) = self.session().ok().and_then(|s| s.peer_focus(peer)) else {
-            return false;
+            return;
         };
         let (view, doc) = current!(self);
         if doc.shared != Some(id) {
-            return false;
+            return;
         }
         // The buffer may have drifted from the replica (#76).
         let pos = pos.min(doc.text().len_chars());
         doc.set_selection(view.id, Selection::point(pos));
         align_view(doc, view, Align::Center);
-        true
     }
 
     fn apply_session_event(&mut self, event: Event) {
