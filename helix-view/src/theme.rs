@@ -358,8 +358,7 @@ fn build_theme_values(
         rainbow_length += 1;
     }
 
-    // Peers' selections, in the rainbow colours. They go after the rainbow,
-    // whose highlights must come first.
+    // Rainbow brackets find their colours by index, so these go after them.
     for (i, style) in rainbow.iter().enumerate() {
         let name = format!("peer.{i}");
         let style = Style {
