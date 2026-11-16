@@ -54,7 +54,7 @@ impl Replica {
         cursor.expect("cursor should be in bounds").encode()
     }
 
-    /// Where a peer's cursor is now. None until the edit it points into arrives.
+    /// None until the edit it points into arrives.
     pub fn decode_cursor(&self, cursor: &[u8]) -> Option<usize> {
         let cursor = Cursor::decode(cursor).ok()?;
         Some(self.doc.get_cursor_pos(&cursor).ok()?.current.pos)
