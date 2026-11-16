@@ -183,9 +183,12 @@ impl Session {
         self.send(Channel::Topic(id.topic()), &GossipMessage::Edit { update });
     }
 
-    pub fn local_focus(&mut self, focus: Option<(SharedId, usize)>) {
+    pub fn update_focus(&mut self, focus: Option<(SharedId, usize)>) {
         // The replica is empty until the snapshot arrives.
-        if focus.is_some_and(|(id, _)| self.syncing(id)) || focus == self.focus {
+        if focus.is_some_and(|(id, _)| self.syncing(id)) {
+            return;
+        }
+        if focus == self.focus {
             return;
         }
         self.focus = focus;
@@ -282,11 +285,17 @@ impl Session {
                 }
             }
             GossipMessage::Focus {
-                peer, at: Some(at), ..
+                peer,
+                location: Some(location),
+                ..
             } => {
-                self.peer_focus.insert(peer, at);
+                self.peer_focus.insert(peer, location);
             }
-            GossipMessage::Focus { peer, at: None, .. } => {
+            GossipMessage::Focus {
+                peer,
+                location: None,
+                ..
+            } => {
                 self.peer_focus.remove(&peer);
             }
             GossipMessage::Share {
@@ -420,13 +429,13 @@ impl Session {
     }
 
     fn send_focus(&mut self) {
-        let at = self.focus.and_then(|(id, pos)| {
+        let location = self.focus.and_then(|(id, pos)| {
             let replica = self.replicas.get(&id)?;
             Some((id, replica.encode_cursor(pos)))
         });
         let message = GossipMessage::Focus {
             peer: self.me,
-            at,
+            location,
             nonce: self.rng.random(),
         };
         self.send(Channel::Topic(self.topic), &message);
@@ -483,7 +492,6 @@ impl Session {
         name.unwrap_or_else(|| peer.fmt_short().to_string())
     }
 
-    /// The document a peer is in, and where in it if we have it open.
     pub fn peer_focus(&self, peer: EndpointId) -> Option<(SharedId, Option<usize>)> {
         let (id, cursor) = self.peer_focus.get(&peer)?;
         let replica = self.replicas.get(id).filter(|_| !self.syncing(*id));

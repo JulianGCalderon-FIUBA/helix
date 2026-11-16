@@ -261,7 +261,7 @@ impl Editor {
             let text = doc.text().slice(..);
             (id, doc.selection(view.id).primary().cursor(text))
         });
-        let _ = self.with_session(|session| session.local_focus(focus));
+        let _ = self.with_session(|session| session.update_focus(focus));
     }
 
     pub fn is_remote(&self, doc: &Document) -> bool {

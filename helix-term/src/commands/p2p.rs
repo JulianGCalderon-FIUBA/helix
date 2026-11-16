@@ -101,7 +101,7 @@ pub fn session_file_picker(cx: &mut Context) {
 /// Opens a picker of the other peers in the session.
 pub fn session_peer_picker(cx: &mut Context) {
     // Each peer's name with the file they're in, as owner:path.
-    let items: Vec<PeerItem> = match cx.editor.session() {
+    let items: Vec<(EndpointId, String, Option<PathBuf>)> = match cx.editor.session() {
         Ok(session) => session
             .peers()
             .iter()
@@ -119,12 +119,17 @@ pub fn session_peer_picker(cx: &mut Context) {
     };
 
     let columns = [
-        PickerColumn::new("peer", |(_, name, _): &PeerItem, _| name.as_str().into()),
+        PickerColumn::new(
+            "peer",
+            |(_, name, _): &(EndpointId, String, Option<PathBuf>), _| name.as_str().into(),
+        ),
         PickerColumn::new(
             "file",
-            |(_, _, file): &PeerItem, config: &PathStyleConfig| match file {
-                Some(file) => config.stylize(Some(file), None),
-                None => "".into(),
+            |(_, _, file): &(EndpointId, String, Option<PathBuf>), config: &PathStyleConfig| {
+                match file {
+                    Some(file) => config.stylize(Some(file), None),
+                    None => "".into(),
+                }
             },
         ),
     ];
@@ -152,8 +157,6 @@ pub fn session_peer_picker(cx: &mut Context) {
     });
     cx.push_layer(Box::new(overlaid(picker)));
 }
-
-type PeerItem = (EndpointId, String, Option<PathBuf>);
 
 pub(super) fn new_session(editor: &mut Editor, jobs: &mut Jobs) -> anyhow::Result<()> {
     let ticket = editor.session_ticket()?;
