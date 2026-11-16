@@ -248,6 +248,18 @@ impl Editor {
         Ok(())
     }
 
+    pub fn sync_focus(&mut self) {
+        if self.session().is_err() {
+            return;
+        }
+        let (view, doc) = current_ref!(self);
+        let focus = doc.shared.map(|id| {
+            let text = doc.text().slice(..);
+            (id, doc.selection(view.id).primary().cursor(text))
+        });
+        let _ = self.with_session(|session| session.local_focus(focus));
+    }
+
     pub fn is_remote(&self, doc: &Document) -> bool {
         self.remote_path(doc).is_some()
     }

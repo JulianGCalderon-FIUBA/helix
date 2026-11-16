@@ -263,6 +263,9 @@ impl Application {
     }
 
     async fn render(&mut self) {
+        // Every input renders, so this catches every cursor move.
+        self.editor.sync_focus();
+
         if self.compositor.full_redraw {
             self.terminal.clear().expect("Cannot clear the terminal");
             self.compositor.full_redraw = false;
