@@ -258,8 +258,9 @@ impl Editor {
         }
         let (view, doc) = current_ref!(self);
         let focus = doc.shared.map(|id| {
-            let text = doc.text().slice(..);
-            (id, doc.selection(view.id).primary().cursor(text))
+            let selection = doc.selection(view.id);
+            let cursor = selection.primary().cursor(doc.text().slice(..));
+            (id, cursor, selection.clone())
         });
         let _ = self.with_session(|session| session.update_focus(focus));
     }

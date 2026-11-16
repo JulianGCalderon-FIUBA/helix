@@ -60,6 +60,11 @@ impl Peer {
         self.session.local_change(id, transaction.changes());
     }
 
+    fn focus(&mut self, id: SharedId, pos: usize) {
+        let focus = (id, pos, Selection::point(pos));
+        self.session.update_focus(Some(focus));
+    }
+
     fn text(&self, id: SharedId) -> String {
         self.buffers[&id].to_string()
     }
@@ -459,7 +464,7 @@ fn focus_follows_edits() {
     net.peer(guest).open(id);
     net.flush();
 
-    net.peer(owner).session.update_focus(Some((id, 2)));
+    net.peer(owner).focus(id, 2);
     net.peer(guest).insert(id, 0, "> ");
     net.flush();
 
@@ -474,7 +479,7 @@ fn late_joiner_learns_focus() {
     let mut net = Network::default();
     let owner = net.join();
     let id = net.peer(owner).share("hello");
-    net.peer(owner).session.update_focus(Some((id, 2)));
+    net.peer(owner).focus(id, 2);
     net.flush();
 
     let guest = net.join();
@@ -492,11 +497,11 @@ fn focus_is_not_sent_while_opening() {
     net.flush();
 
     net.peer(guest).open(id);
-    net.peer(guest).session.update_focus(Some((id, 2)));
+    net.peer(guest).focus(id, 2);
     net.flush();
     assert_eq!(net.peer(owner).session.peer_focus(guest), None);
 
-    net.peer(guest).session.update_focus(Some((id, 2)));
+    net.peer(guest).focus(id, 2);
     net.flush();
     assert_eq!(
         net.peer(owner).session.peer_focus(guest),
@@ -510,7 +515,7 @@ fn leaving_a_shared_buffer_clears_focus() {
     let owner = net.join();
     let guest = net.join();
     let id = net.peer(owner).share("hello");
-    net.peer(owner).session.update_focus(Some((id, 2)));
+    net.peer(owner).focus(id, 2);
     net.flush();
 
     net.peer(owner).session.update_focus(None);
@@ -525,11 +530,54 @@ fn leaving_the_session_clears_focus() {
     let owner = net.join();
     let guest = net.join();
     let id = net.peer(owner).share("hello");
-    net.peer(owner).session.update_focus(Some((id, 2)));
+    net.peer(owner).focus(id, 2);
     net.flush();
 
     net.leave(owner);
     net.flush();
 
     assert_eq!(net.peer(guest).session.peer_focus(owner), None);
+}
+
+#[test]
+fn selections_follow_edits() {
+    let mut net = Network::default();
+    let owner = net.join();
+    let guest = net.join();
+    let id = net.peer(owner).share("hello world");
+    net.flush();
+    net.peer(guest).open(id);
+    net.flush();
+
+    let ranges = [Range::new(0, 5), Range::new(6, 11)];
+    let selection = Selection::new(ranges.into_iter().collect(), 0);
+    net.peer(owner)
+        .session
+        .update_focus(Some((id, 4, selection)));
+    net.peer(guest).insert(id, 0, "> ");
+    net.flush();
+
+    let ranges = [Range::new(2, 7), Range::new(8, 13)];
+    assert_eq!(
+        net.peer(guest).session.peer_selections(id),
+        [(owner, Selection::new(ranges.into_iter().collect(), 0))]
+    );
+}
+
+#[test]
+fn opening_shows_existing_selections() {
+    let mut net = Network::default();
+    let owner = net.join();
+    let guest = net.join();
+    let id = net.peer(owner).share("hello");
+    net.peer(owner).focus(id, 2);
+    net.flush();
+
+    net.peer(guest).open(id);
+    net.flush();
+
+    assert_eq!(
+        net.peer(guest).session.peer_selections(id),
+        [(owner, Selection::point(2))]
+    );
 }
