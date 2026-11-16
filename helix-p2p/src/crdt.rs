@@ -49,13 +49,13 @@ impl Replica {
             .expect("export should not fail")
     }
 
-    pub fn cursor(&self, pos: usize) -> Vec<u8> {
+    pub fn encode_cursor(&self, pos: usize) -> Vec<u8> {
         let cursor = self.text.get_cursor(pos, Side::Middle);
         cursor.expect("cursor should be in bounds").encode()
     }
 
     /// Where a peer's cursor is now. None until the edit it points into arrives.
-    pub fn resolve(&self, cursor: &[u8]) -> Option<usize> {
+    pub fn decode_cursor(&self, cursor: &[u8]) -> Option<usize> {
         let cursor = Cursor::decode(cursor).ok()?;
         Some(self.doc.get_cursor_pos(&cursor).ok()?.current.pos)
     }
@@ -321,34 +321,34 @@ mod tests {
         let mut local = Buffer::new("hello world");
         let mut remote = local.fork();
 
-        let cursor = local.replica.cursor(6);
+        let cursor = local.replica.encode_cursor(6);
         let update = remote.edit(vec![(0, 0, Some("> ".into()))]);
         local.receive(&update);
 
-        assert_eq!(remote.replica.resolve(&cursor), Some(8));
-        assert_eq!(local.replica.resolve(&cursor), Some(8));
+        assert_eq!(remote.replica.decode_cursor(&cursor), Some(8));
+        assert_eq!(local.replica.decode_cursor(&cursor), Some(8));
     }
 
     #[test]
     fn cursor_at_end() {
         let buffer = Buffer::new("hello");
-        let cursor = buffer.replica.cursor(5);
-        assert_eq!(buffer.fork().replica.resolve(&cursor), Some(5));
+        let cursor = buffer.replica.encode_cursor(5);
+        assert_eq!(buffer.fork().replica.decode_cursor(&cursor), Some(5));
     }
 
     // Buffers can drift from their replica (#76).
     #[test]
     fn cursor_past_the_end_is_at_the_end() {
         let buffer = Buffer::new("hello");
-        let cursor = buffer.replica.cursor(10);
-        assert_eq!(buffer.replica.resolve(&cursor), Some(5));
+        let cursor = buffer.replica.encode_cursor(10);
+        assert_eq!(buffer.replica.decode_cursor(&cursor), Some(5));
     }
 
     #[test]
     fn cursor_in_empty_text() {
         let buffer = Buffer::new("");
-        let cursor = buffer.replica.cursor(0);
-        assert_eq!(buffer.fork().replica.resolve(&cursor), Some(0));
+        let cursor = buffer.replica.encode_cursor(0);
+        assert_eq!(buffer.fork().replica.decode_cursor(&cursor), Some(0));
     }
 
     #[test]
@@ -357,8 +357,8 @@ mod tests {
         let remote = local.fork();
 
         local.edit(vec![(0, 0, Some("hello".into()))]);
-        let cursor = local.replica.cursor(2);
+        let cursor = local.replica.encode_cursor(2);
 
-        assert_eq!(remote.replica.resolve(&cursor), None);
+        assert_eq!(remote.replica.decode_cursor(&cursor), None);
     }
 }

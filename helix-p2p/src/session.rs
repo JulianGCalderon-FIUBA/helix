@@ -422,7 +422,7 @@ impl Session {
     fn send_focus(&mut self) {
         let at = self.focus.and_then(|(id, pos)| {
             let replica = self.replicas.get(&id)?;
-            Some((id, replica.cursor(pos)))
+            Some((id, replica.encode_cursor(pos)))
         });
         let message = GossipMessage::Focus {
             peer: self.me,
@@ -487,7 +487,10 @@ impl Session {
     pub fn peer_focus(&self, peer: EndpointId) -> Option<(SharedId, Option<usize>)> {
         let (id, cursor) = self.peer_focus.get(&peer)?;
         let replica = self.replicas.get(id).filter(|_| !self.syncing(*id));
-        Some((*id, replica.and_then(|replica| replica.resolve(cursor))))
+        Some((
+            *id,
+            replica.and_then(|replica| replica.decode_cursor(cursor)),
+        ))
     }
 
     pub fn documents(&self) -> &HashMap<SharedId, SharedMeta> {
