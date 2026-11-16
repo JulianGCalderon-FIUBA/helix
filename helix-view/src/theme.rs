@@ -340,7 +340,7 @@ fn build_theme_values(
     scopes.reserve(values.len());
     highlights.reserve(values.len());
 
-    for (i, style) in values
+    let rainbow = values
         .remove("rainbow")
         .and_then(|value| match palette.parse_style_array(value) {
             Ok(styles) => Some(styles),
@@ -349,15 +349,24 @@ fn build_theme_values(
                 None
             }
         })
-        .unwrap_or_else(default_rainbow)
-        .into_iter()
-        .enumerate()
-    {
+        .unwrap_or_else(default_rainbow);
+    for (i, &style) in rainbow.iter().enumerate() {
         let name = format!("rainbow.{i}");
         styles.insert(name.clone(), style);
         scopes.push(name);
         highlights.push(style);
         rainbow_length += 1;
+    }
+
+    for (i, style) in rainbow.iter().enumerate() {
+        let name = format!("peer.{i}");
+        let style = Style {
+            bg: style.fg,
+            ..Style::default()
+        };
+        styles.insert(name.clone(), style);
+        scopes.push(name);
+        highlights.push(style);
     }
 
     for (name, style_value) in values {

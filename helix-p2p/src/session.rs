@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use bytes::Bytes;
-use helix_core::{Change, ChangeSet, Rope};
+use helix_core::{Change, ChangeSet, Range, Rope, Selection, SmallVec};
 use iroh_tickets::ParseError;
 pub use iroh_tickets::Ticket;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -17,8 +17,10 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crate::{
     crdt::Replica,
     net::{Channel, EndpointAddr, EndpointId, TopicId},
-    wire::{self, GossipMessage, PeerMessage, SharedId},
+    wire::{self, GossipMessage, Location, PeerMessage, SharedId},
 };
+
+pub type Cursor = usize;
 
 /// An invitation into a session. Any member can hand one out.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,10 +84,9 @@ pub struct Session {
     rng: StdRng,
     /// The other peers, by name.
     peers: HashMap<EndpointId, String>,
-    /// The document each peer is in, with a replica cursor.
-    peer_focus: HashMap<EndpointId, (SharedId, Vec<u8>)>,
+    peer_focus: HashMap<EndpointId, Location>,
     /// What we last told peers about our own focus.
-    focus: Option<(SharedId, usize)>,
+    focus: Option<(SharedId, Cursor, Selection)>,
     documents: HashMap<SharedId, SharedMeta>,
     replicas: HashMap<SharedId, Replica>,
     /// The owner and document of each snapshot we requested.
@@ -183,9 +184,10 @@ impl Session {
         self.send(Channel::Topic(id.topic()), &GossipMessage::Edit { update });
     }
 
-    pub fn update_focus(&mut self, focus: Option<(SharedId, usize)>) {
+    /// The cursor needs the buffer's graphemes, so the caller finds it.
+    pub fn update_focus(&mut self, focus: Option<(SharedId, Cursor, Selection)>) {
         // The replica is empty until the snapshot arrives.
-        if focus.is_some_and(|(id, _)| self.syncing(id)) {
+        if focus.as_ref().is_some_and(|(id, ..)| self.syncing(*id)) {
             return;
         }
         if focus == self.focus {
@@ -429,9 +431,17 @@ impl Session {
     }
 
     fn send_focus(&mut self) {
-        let location = self.focus.and_then(|(id, pos)| {
-            let replica = self.replicas.get(&id)?;
-            Some((id, replica.encode_cursor(pos)))
+        let location = self.focus.as_ref().and_then(|(id, cursor, selection)| {
+            let replica = self.replicas.get(id)?;
+            let ranges = selection.iter().map(|range| {
+                let anchor = replica.encode_cursor(range.anchor);
+                (anchor, replica.encode_cursor(range.head))
+            });
+            Some(Location {
+                id: *id,
+                cursor: replica.encode_cursor(*cursor),
+                ranges: ranges.collect(),
+            })
         });
         let message = GossipMessage::Focus {
             peer: self.me,
@@ -492,13 +502,36 @@ impl Session {
         name.unwrap_or_else(|| peer.fmt_short().to_string())
     }
 
-    pub fn peer_focus(&self, peer: EndpointId) -> Option<(SharedId, Option<usize>)> {
-        let (id, cursor) = self.peer_focus.get(&peer)?;
-        let replica = self.replicas.get(id).filter(|_| !self.syncing(*id));
+    pub fn peer_focus(&self, peer: EndpointId) -> Option<(SharedId, Option<Cursor>)> {
+        let location = self.peer_focus.get(&peer)?;
+        let replica = self.synced_replica(location.id);
         Some((
-            *id,
-            replica.and_then(|replica| replica.decode_cursor(cursor)),
+            location.id,
+            replica.and_then(|replica| replica.decode_cursor(&location.cursor)),
         ))
+    }
+
+    /// Ranges are left out until the edit they point into arrives.
+    pub fn peer_selections(&self, id: SharedId) -> Vec<(EndpointId, Selection)> {
+        let Some(replica) = self.synced_replica(id) else {
+            return Vec::new();
+        };
+        self.peer_focus
+            .iter()
+            .filter(|(_, location)| location.id == id)
+            .filter_map(|(&peer, location)| {
+                let ranges = location.ranges.iter().filter_map(|(anchor, head)| {
+                    let anchor = replica.decode_cursor(anchor)?;
+                    Some(Range::new(anchor, replica.decode_cursor(head)?))
+                });
+                let ranges: SmallVec<_> = ranges.collect();
+                (!ranges.is_empty()).then(|| (peer, Selection::new(ranges, 0)))
+            })
+            .collect()
+    }
+
+    fn synced_replica(&self, id: SharedId) -> Option<&Replica> {
+        self.replicas.get(&id).filter(|_| !self.syncing(id))
     }
 
     pub fn documents(&self) -> &HashMap<SharedId, SharedMeta> {

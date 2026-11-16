@@ -54,12 +54,20 @@ pub enum GossipMessage {
     },
     Focus {
         peer: EndpointId,
-        location: Option<(SharedId, Vec<u8>)>,
+        location: Option<Location>,
         nonce: u64,
     },
     Edit {
         update: Vec<u8>,
     },
+}
+
+/// Where a peer is in a document, as replica cursors.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Location {
+    pub id: SharedId,
+    pub cursor: Vec<u8>,
+    pub ranges: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 /// Messages over a direct connection between two peers.
