@@ -1,6 +1,8 @@
+use std::path::{Path, PathBuf};
+
 use anyhow::Context as _;
-use helix_p2p::session::SharedMeta;
-use helix_view::{doc, Editor};
+use helix_p2p::{net::EndpointId, session::SharedMeta};
+use helix_view::{doc, document::SCRATCH_BUFFER_NAME, Editor};
 
 use crate::{
     compositor::Compositor,
@@ -98,33 +100,60 @@ pub fn session_file_picker(cx: &mut Context) {
 
 /// Opens a picker of the other peers in the session.
 pub fn session_peer_picker(cx: &mut Context) {
-    // Each peer's name with how many documents they share.
-    let items: Vec<(String, usize)> = match cx.editor.session() {
+    // Each peer's name with the file they're in, as owner:path.
+    let items: Vec<PeerItem> = match cx.editor.session() {
         Ok(session) => session
             .peers()
             .iter()
             .map(|(&peer, name)| {
-                let documents = session.documents().values();
-                let shared = documents.filter(|meta| meta.owner == peer).count();
-                (name.clone(), shared)
+                let (id, _) = session.peer_focus(peer).unzip();
+                let file = id.and_then(|id| session.documents().get(&id)).map(|meta| {
+                    let path = meta.path.as_deref();
+                    let path = path.unwrap_or(Path::new(SCRATCH_BUFFER_NAME));
+                    format!("{}:{}", session.name(meta.owner), path.display()).into()
+                });
+                (peer, name.clone(), file)
             })
             .collect(),
         Err(err) => return cx.editor.set_error(err.to_string()),
     };
 
     let columns = [
-        PickerColumn::new("peer", |(name, _): &(String, usize), _| {
-            name.as_str().into()
-        }),
-        PickerColumn::new("shared", |(_, shared): &(String, usize), _| {
-            shared.to_string().into()
-        }),
+        PickerColumn::new("peer", |(_, name, _): &PeerItem, _| name.as_str().into()),
+        PickerColumn::new(
+            "file",
+            |(_, _, file): &PeerItem, config: &PathStyleConfig| match file {
+                Some(file) => config.stylize(Some(file), None),
+                None => "".into(),
+            },
+        ),
     ];
 
-    // TODO: jump to the peer when picked (#51).
-    let picker = Picker::new(columns, 0, items, (), |_, _, _| {});
+    let picker = Picker::new(
+        columns,
+        0,
+        items,
+        PathStyleConfig::new(&cx.editor.theme),
+        |cx, (peer, _, _), action| {
+            if let Err(err) = cx.editor.jump_to_peer(*peer, action) {
+                cx.editor.set_error(err.to_string());
+            }
+        },
+    )
+    .with_preview(|editor, (peer, _, _)| {
+        // Only buffers we opened have preview.
+        let (id, pos) = editor.session().ok()?.peer_focus(*peer)?;
+        let doc = editor.shared_document(id)?;
+        let line = pos.map(|pos| {
+            let line = doc.text().char_to_line(pos.min(doc.text().len_chars()));
+            (line, line)
+        });
+        Some((doc.id().into(), line))
+    });
     cx.push_layer(Box::new(overlaid(picker)));
 }
+
+type PeerItem = (EndpointId, String, Option<PathBuf>);
 
 pub(super) fn new_session(editor: &mut Editor, jobs: &mut Jobs) -> anyhow::Result<()> {
     let ticket = editor.session_ticket()?;

@@ -3,10 +3,10 @@
 use std::{future::Future, iter, path::Path};
 
 use anyhow::{ensure, Context, Result};
-use helix_core::{diff::compare_ropes, ChangeSet, Rope, Transaction};
+use helix_core::{diff::compare_ropes, ChangeSet, Rope, Selection, Transaction};
 use helix_event::register_hook;
 use helix_p2p::{
-    net::{self, Channel, Service},
+    net::{self, Channel, EndpointId, Service},
     session::{Event, Session, SessionTicket, Ticket, Transmit},
     wire::SharedId,
 };
@@ -14,10 +14,11 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 
 use crate::{
+    align_view,
     document::SCRATCH_BUFFER_NAME,
     editor::Action,
     events::{DocumentDidChange, DocumentDidClose},
-    Document, DocumentId, Editor,
+    Align, Document, DocumentId, Editor,
 };
 
 /// What happened to a shared buffer locally. The document hook can't reach
@@ -40,6 +41,8 @@ pub struct P2p {
     incoming: UnboundedReceiverStream<net::Event>,
     local_events_tx: UnboundedSender<LocalEvent>,
     local_events: UnboundedReceiver<LocalEvent>,
+    /// A peer to jump to once their document has loaded.
+    pending_jump: Option<(SharedId, EndpointId)>,
 }
 
 impl P2p {
@@ -52,6 +55,7 @@ impl P2p {
             incoming,
             local_events_tx,
             local_events,
+            pending_jump: None,
         }
     }
 
@@ -338,6 +342,33 @@ impl Editor {
         Ok(())
     }
 
+    pub fn jump_to_peer(&mut self, peer: EndpointId, action: Action) -> Result<()> {
+        let session = self.session()?;
+        let (id, _) = session
+            .peer_focus(peer)
+            .with_context(|| format!("{} is not in a shared buffer", session.name(peer)))?;
+        self.open_shared_document(id, action)?;
+        let moved = self.move_to_peer(peer);
+        self.p2p_mut()?.pending_jump = (!moved).then_some((id, peer));
+        Ok(())
+    }
+
+    /// Moves the cursor to the peer's, if the focused buffer is theirs.
+    fn move_to_peer(&mut self, peer: EndpointId) -> bool {
+        let Some((id, Some(pos))) = self.session().ok().and_then(|s| s.peer_focus(peer)) else {
+            return false;
+        };
+        let (view, doc) = current!(self);
+        if doc.shared != Some(id) {
+            return false;
+        }
+        // The buffer may have drifted from the replica (#76).
+        let pos = pos.min(doc.text().len_chars());
+        doc.set_selection(view.id, Selection::point(pos));
+        align_view(doc, view, Align::Center);
+        true
+    }
+
     fn apply_session_event(&mut self, event: Event) {
         match event {
             Event::Changes { id, changes } => {
@@ -368,6 +399,14 @@ impl Editor {
                 doc.shared = None;
                 doc.apply(&transaction, view_id);
                 doc.shared = Some(id);
+
+                let pending = self
+                    .p2p
+                    .as_mut()
+                    .and_then(|p2p| p2p.pending_jump.take_if(|(pending, _)| *pending == id));
+                if let Some((_, peer)) = pending {
+                    self.move_to_peer(peer);
+                }
             }
             Event::Unshared { id, reason } => {
                 let Some(doc) = self.documents_mut().find(|doc| doc.shared == Some(id)) else {
