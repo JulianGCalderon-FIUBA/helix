@@ -182,6 +182,8 @@ impl Session {
         self.send(Channel::Topic(id.topic()), &GossipMessage::Edit { update });
     }
 
+    /// The cursor comes apart from the selection because it depends on
+    /// graphemes, which the caller finds in the buffer.
     pub fn update_focus(&mut self, focus: Option<(SharedId, usize, Selection)>) {
         // The replica is empty until the snapshot arrives.
         if focus.as_ref().is_some_and(|(id, ..)| self.syncing(*id)) {
