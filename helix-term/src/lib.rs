@@ -22,6 +22,8 @@ use std::process::Stdio;
 use futures_util::Future;
 mod handlers;
 
+pub use handlers::setup as setup_handlers;
+
 use helix_stdx::Url;
 use ignore::DirEntry;
 
