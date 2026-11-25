@@ -1,0 +1,26 @@
+[package]
+name = "helix-peer"
+description = "Headless peers and bots to stress test collaboration"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+categories.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+helix-core = { path = "../helix-core" }
+helix-view = { path = "../helix-view" }
+helix-term = { path = "../helix-term", default-features = false }
+helix-p2p = { path = "../helix-p2p" }
+helix-loader = { path = "../helix-loader" }
+
+anyhow = "1"
+log = "~0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "process", "time"] }
+futures-util.workspace = true
+arc-swap.workspace = true

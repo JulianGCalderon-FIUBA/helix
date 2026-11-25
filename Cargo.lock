@@ -2504,6 +2504,24 @@ name = "helix-parsec"
 version = "25.7.1"
 
 [[package]]
+name = "helix-peer"
+version = "25.7.1"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "futures-util",
+ "helix-core",
+ "helix-loader",
+ "helix-p2p",
+ "helix-term",
+ "helix-view",
+ "log",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "helix-stdx"
 version = "25.7.1"
 dependencies = [

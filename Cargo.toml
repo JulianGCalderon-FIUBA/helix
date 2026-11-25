@@ -9,6 +9,7 @@ members = [
   "helix-lsp",
   "helix-event",
   "helix-p2p",
+  "helix-peer",
   "helix-dap-types",
   "helix-dap",
   "helix-loader",
