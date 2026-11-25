@@ -530,7 +530,7 @@ impl Session {
             .collect()
     }
 
-    fn synced_replica(&self, id: SharedId) -> Option<&Replica> {
+    pub fn synced_replica(&self, id: SharedId) -> Option<&Replica> {
         self.replicas.get(&id).filter(|_| !self.syncing(id))
     }
 

@@ -43,6 +43,10 @@ impl Replica {
         self.text.to_string()
     }
 
+    pub fn len_ops(&self) -> usize {
+        self.doc.len_ops()
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         self.doc
             .export(ExportMode::Snapshot)
