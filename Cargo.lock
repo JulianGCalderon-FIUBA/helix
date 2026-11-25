@@ -2516,6 +2516,7 @@ dependencies = [
  "helix-term",
  "helix-view",
  "log",
+ "rand 0.9.5",
  "serde",
  "serde_json",
  "tokio",
