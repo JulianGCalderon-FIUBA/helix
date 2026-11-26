@@ -2504,6 +2504,20 @@ name = "helix-parsec"
 version = "25.7.1"
 
 [[package]]
+name = "helix-peer"
+version = "25.7.1"
+dependencies = [
+ "anyhow",
+ "helix-core",
+ "helix-p2p",
+ "log",
+ "parking_lot",
+ "rand 0.9.5",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "helix-stdx"
 version = "25.7.1"
 dependencies = [

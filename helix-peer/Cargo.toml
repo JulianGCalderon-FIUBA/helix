@@ -1,0 +1,26 @@
+[package]
+name = "helix-peer"
+description = "Simulated users that stress test collaboration over the real network"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+categories.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "hx-swarm"
+path = "src/main.rs"
+
+[dependencies]
+helix-core = { path = "../helix-core" }
+helix-p2p = { path = "../helix-p2p" }
+
+anyhow = "1"
+log = { version = "0.4", features = ["std"] }
+rand = "0.9.2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio-stream.workspace = true
+parking_lot.workspace = true
