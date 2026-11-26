@@ -14,7 +14,7 @@ use helix_term::{
 };
 use helix_view::{
     doc,
-    editor::{Action, EditorEvent, P2pConfig},
+    editor::{Action, EditorEvent},
     graphics::Rect,
     input::{parse_macro, Event},
     Editor,
@@ -31,9 +31,9 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub fn new(p2p: P2pConfig) -> Self {
+    pub fn new(name: Option<String>) -> Self {
         let mut config = Config::default();
-        config.editor.p2p = p2p;
+        config.editor.p2p.name = name;
         let trust = WorkspaceTrust::new((&config.editor.workspace_trust).into());
         let area = Rect::new(0, 0, 120, 40);
 

@@ -9,7 +9,7 @@ use iroh::{
     address_lookup::memory::MemoryLookup,
     endpoint::{presets, Connection},
     protocol::{AcceptError, ProtocolHandler, Router},
-    Endpoint, RelayMode, SecretKey,
+    Endpoint, SecretKey,
 };
 pub use iroh::{EndpointAddr, EndpointId};
 pub use iroh_gossip::TopicId;
@@ -71,9 +71,7 @@ pub struct Service {
 }
 
 impl Service {
-    /// Without relays, peers only reach each other directly, like on a
-    /// local network.
-    pub fn new(relay: bool) -> (Self, UnboundedReceiverStream<Event>) {
+    pub fn new() -> (Self, UnboundedReceiverStream<Event>) {
         let (events_tx, events_rx) = unbounded_channel();
         let (requests_tx, requests_rx) = unbounded_channel();
 
@@ -81,7 +79,7 @@ impl Service {
         let id = secret_key.public();
 
         tokio::spawn(async move {
-            Actor::bind(secret_key, relay, events_tx)
+            Actor::bind(secret_key, events_tx)
                 .await
                 .run(requests_rx)
                 .await;
@@ -158,21 +156,13 @@ struct Actor {
 }
 
 impl Actor {
-    async fn bind(secret_key: SecretKey, relay: bool, events: UnboundedSender<Event>) -> Self {
-        let builder = if relay {
-            Endpoint::builder(presets::N0)
-        } else {
-            Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Disabled)
-        };
-        let endpoint = builder
+    async fn bind(secret_key: SecretKey, events: UnboundedSender<Event>) -> Self {
+        let endpoint = Endpoint::builder(presets::N0)
             .secret_key(secret_key)
             .bind()
             .await
             .expect("failed to bind the endpoint");
-        // Being online means reaching a relay.
-        if relay {
-            endpoint.online().await;
-        }
+        endpoint.online().await;
         log::info!("listening as {}", endpoint.id().fmt_short());
 
         let gossip = Gossip::builder()

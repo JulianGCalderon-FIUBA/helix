@@ -576,4 +576,3 @@ Controls p2p module.
 | ---      | ---                                                                      | ---     |
 | `enable` | Enable p2p module                                                        | `true`  |
 | `name`   | Public name                                                              | Address |
-| `relay`  | Connect through relays, to reach peers outside the local network         | `true`  |
