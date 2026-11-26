@@ -153,7 +153,7 @@ impl Editor {
 
     /// Sends the session's messages and applies its events. Runs after every
     /// input to the session.
-    fn drain_session_queue(&mut self) {
+    pub fn drain_session_queue(&mut self) {
         let Some(p2p) = &mut self.p2p else {
             return;
         };

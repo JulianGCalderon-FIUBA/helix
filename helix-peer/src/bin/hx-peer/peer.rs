@@ -147,8 +147,7 @@ impl Peer {
     }
 
     fn state(&mut self) -> State {
-        // Applies queued local edits to the replicas.
-        self.editor.with_session(|_| ()).ok();
+        self.editor.drain_session_queue();
         let session = self.editor.session().ok();
         let buffers = self.editor.documents().filter_map(|doc| {
             let id = doc.shared?;
