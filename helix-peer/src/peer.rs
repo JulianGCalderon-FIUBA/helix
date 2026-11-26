@@ -36,7 +36,6 @@ impl Buffer {
 }
 
 /// What a peer holds for a document, to compare with other peers.
-#[derive(Debug, PartialEq)]
 pub struct Snapshot {
     pub id: SharedId,
     pub text: String,
@@ -174,8 +173,7 @@ impl Peer {
     }
 
     pub fn snapshot(&self) -> Vec<Snapshot> {
-        let mut snapshots: Vec<_> = self
-            .buffers
+        self.buffers
             .iter()
             .map(|(&id, buffer)| {
                 let replica = self.session.as_ref().and_then(|s| s.synced_replica(id));
@@ -186,9 +184,7 @@ impl Peer {
                     ops: replica.map_or(0, Replica::len_ops),
                 }
             })
-            .collect();
-        snapshots.sort_by_key(|snapshot| snapshot.id.topic());
-        snapshots
+            .collect()
     }
 
     pub fn handle(&mut self, event: net::Event) {

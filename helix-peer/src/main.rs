@@ -130,7 +130,7 @@ async fn main() -> Result<()> {
     let start = Instant::now();
 
     let ids = start_session(&peers, args.docs, settle).await?;
-    open_documents(&peers, &ids).await?;
+    open_documents(&peers, &names, &ids).await?;
     println!("{:.1?} opened", start.elapsed());
 
     let interval = Duration::from_millis(args.interval);
@@ -151,7 +151,7 @@ async fn main() -> Result<()> {
     println!("{:.1?} users done", start.elapsed());
 
     // Users may have closed documents, so every peer reopens them to compare.
-    open_documents(&peers, &ids).await?;
+    open_documents(&peers, &names, &ids).await?;
 
     let problems = wait_for_convergence(&peers, &names, &ids, settle).await;
     if problems.is_empty() {
@@ -205,30 +205,28 @@ async fn run_user(peer: Arc<Mutex<Peer>>, mut user: User, steps: usize) {
     }
 }
 
-/// Opens every document and waits for its snapshot. Guests only learn of
-/// documents once their join completes in the background, so this retries.
-async fn open_documents(peers: &Peers, ids: &[SharedId]) -> Result<()> {
+/// Opens every document on every peer and waits for the snapshots. Guests
+/// only learn of documents once their join completes in the background, so
+/// opening is retried.
+async fn open_documents(peers: &Peers, names: &[String], ids: &[SharedId]) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
-    for peer in peers {
-        for &id in ids {
-            loop {
-                let (opened, synced, name) = {
-                    let mut peer = peer.lock();
-                    let opened = peer.open(id);
-                    (opened, peer.is_synced(id), peer.name.clone())
-                };
-                if opened.is_ok() && synced {
-                    break;
-                }
-                if Instant::now() > deadline {
-                    let reason = opened.err().map_or("no snapshot".into(), |e| e.to_string());
-                    bail!("{name} failed to open {}: {reason}", id.fmt_short());
-                }
-                sleep(Duration::from_millis(50)).await;
+    loop {
+        let mut synced = true;
+        for peer in peers {
+            let mut peer = peer.lock();
+            for &id in ids {
+                synced &= peer.open(id).is_ok() && peer.is_synced(id);
             }
         }
+        if synced {
+            return Ok(());
+        }
+        if Instant::now() > deadline {
+            let problems = find_problems(names, &collect_snapshots(peers), ids);
+            bail!("failed to open documents: {}", problems.join(", "));
+        }
+        sleep(Duration::from_millis(50)).await;
     }
-    Ok(())
 }
 
 fn collect_snapshots(peers: &Peers) -> Vec<Vec<Snapshot>> {
@@ -244,7 +242,7 @@ async fn wait_for_convergence(
 ) -> Vec<String> {
     let cap = Instant::now() + timeout * 10;
     let mut deadline = Instant::now() + timeout;
-    let mut last = Vec::new();
+    let mut last = 0;
     loop {
         let snapshots = collect_snapshots(peers);
         let problems = find_problems(names, &snapshots, ids);
@@ -252,9 +250,11 @@ async fn wait_for_convergence(
         if problems.is_empty() || now > deadline.min(cap) {
             return problems;
         }
-        if snapshots != last {
+        // Peers make progress as they apply each other's edits.
+        let ops = snapshots.iter().flatten().map(|buffer| buffer.ops).sum();
+        if ops != last {
             deadline = now + timeout;
-            last = snapshots;
+            last = ops;
         }
         sleep(POLL).await;
     }

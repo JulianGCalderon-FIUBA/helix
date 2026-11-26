@@ -9,7 +9,7 @@ use helix_core::{movement, Range, Rope, Selection, SmallVec, Transaction};
 use helix_p2p::wire::SharedId;
 use rand::{rngs::StdRng, seq::IndexedRandom, Rng, SeedableRng};
 
-use crate::peer::Peer;
+use crate::peer::{Buffer, Peer};
 
 const WORDS: &[&str] = &[
     "hello",
@@ -31,9 +31,8 @@ const PASTES: &[&str] = &[
     "the quick brown fox\njumps over the lazy dog\n",
 ];
 
-#[derive(Debug, Clone)]
 pub enum Step {
-    /// Inserts at every cursor, one character per step when typing.
+    /// Inserts at every cursor.
     Insert(String),
     /// Deletes the character before every cursor.
     Backspace,
@@ -45,13 +44,17 @@ pub enum Step {
     JumpNearPeer(usize),
     /// Selects up to the end of the next word.
     SelectWord,
-    SelectLine,
     /// Selects every occurrence of the word, like search and replace.
     SelectAll(&'static str),
     AddCursorBelow,
     KeepPrimary,
     Open(SharedId),
     Close,
+}
+
+enum Edit {
+    Change(Transaction),
+    Select(Selection),
 }
 
 pub struct User {
@@ -80,17 +83,13 @@ impl User {
                 let count = self.rng.random_range(1..8);
                 steps.extend((0..count).map(|_| Step::Backspace));
             }
-            40..48 => steps.extend([Step::SelectWord, Step::Delete]),
-            48..52 => steps.extend([Step::SelectLine, Step::Delete]),
-            52..60 => {
+            40..50 => steps.extend([Step::SelectWord, Step::Delete]),
+            50..58 => {
                 steps.extend([Step::SelectWord, Step::Delete]);
                 self.typing(&mut steps);
             }
-            60..65 => {
-                let paste = self.pick(PASTES);
-                steps.push(Step::Insert(paste.into()));
-            }
-            65..78 => steps.push(Step::Jump(self.rng.random())),
+            58..63 => steps.push(Step::Insert(self.pick(PASTES).into())),
+            63..78 => steps.push(Step::Jump(self.rng.random())),
             78..85 => steps.push(Step::JumpNearPeer(self.rng.random_range(0..20))),
             85..90 => {
                 let cursors = self.rng.random_range(1..4);
@@ -127,7 +126,7 @@ impl User {
             if self.rng.random_bool(0.1) {
                 steps.extend([Step::Insert("x".into()), Step::Backspace]);
             }
-            let separator = if self.rng.random_bool(0.2) { '\n' } else { ' ' };
+            let separator = if self.rng.random_bool(0.2) { "\n" } else { " " };
             steps.push(Step::Insert(separator.into()));
         }
     }
@@ -146,88 +145,84 @@ impl Step {
                 if let Err(err) = peer.open(id) {
                     log::warn!("{} failed to open {}: {err:#}", peer.name, id.fmt_short());
                 }
-                return;
             }
             Step::Close => {
                 if let Some((id, _)) = peer.focused() {
                     peer.close(id);
                 }
-                return;
             }
-            Step::JumpNearPeer(offset) => {
-                if let Some(&cursor) = peer.peer_cursors().first() {
-                    let len = peer.focused().map_or(0, |(_, b)| b.text.len_chars());
-                    peer.select(Selection::point((cursor + offset).min(len)));
+            step => {
+                let peers = peer.peer_cursors();
+                let Some((_, buffer)) = peer.focused() else {
+                    return;
+                };
+                match step.edit(buffer, &peers) {
+                    Some(Edit::Change(transaction)) => peer.apply(&transaction),
+                    Some(Edit::Select(selection)) => peer.select(selection),
+                    None => {}
                 }
-                return;
             }
-            _ => {}
         }
+    }
 
-        let Some((_, buffer)) = peer.focused() else {
-            return;
+    /// What the step does to the buffer, given where the other peers are.
+    fn edit(self, buffer: &Buffer, peers: &[usize]) -> Option<Edit> {
+        let (text, selection) = (&buffer.text, &buffer.selection);
+        let change = |f: fn(&Range) -> (usize, usize)| {
+            let changes = selection.iter().map(|range| {
+                let (from, to) = f(range);
+                (from, to, None)
+            });
+            Edit::Change(Transaction::change(text, changes))
         };
-        let text = &buffer.text;
-        let selection = &buffer.selection;
-        let slice = text.slice(..);
-        match self {
+        let edit = match self {
             Step::Insert(insert) => {
-                peer.apply(&Transaction::insert(text, selection, insert.into()));
+                Edit::Change(Transaction::insert(text, selection, insert.into()))
             }
-            Step::Backspace => {
-                let transaction = Transaction::change_by_selection(text, selection, |range| {
-                    let from = range.head.saturating_sub(1);
-                    (from, range.head, None)
-                });
-                peer.apply(&transaction);
-            }
-            Step::Delete => {
-                let transaction = Transaction::change_by_selection(text, selection, |range| {
-                    (range.from(), range.to(), None)
-                });
-                peer.apply(&transaction);
-            }
+            Step::Backspace => change(|range| (range.head.saturating_sub(1), range.head)),
+            Step::Delete => change(|range| (range.from(), range.to())),
             Step::Jump(fraction) => {
                 let line = (fraction * text.len_lines() as f64) as usize;
-                let line = line.min(text.len_lines().saturating_sub(1));
-                peer.select(Selection::point(text.line_to_char(line)));
+                let line = line.min(text.len_lines() - 1);
+                Edit::Select(Selection::point(text.line_to_char(line)))
+            }
+            Step::JumpNearPeer(offset) => {
+                let pos = (peers.first()? + offset).min(text.len_chars());
+                Edit::Select(Selection::point(pos))
             }
             Step::SelectWord => {
-                let range = movement::move_next_word_end(slice, selection.primary(), 1);
-                peer.select(Selection::single(range.anchor, range.head));
-            }
-            Step::SelectLine => {
-                let line = text.char_to_line(selection.primary().head);
-                let end = text.line_to_char((line + 1).min(text.len_lines()));
-                peer.select(Selection::single(text.line_to_char(line), end));
+                let range = movement::move_next_word_end(text.slice(..), selection.primary(), 1);
+                Edit::Select(Selection::single(range.anchor, range.head))
             }
             Step::SelectAll(word) => {
                 let ranges: SmallVec<_> = occurrences(text, word).collect();
-                if !ranges.is_empty() {
-                    peer.select(Selection::new(ranges, 0));
+                if ranges.is_empty() {
+                    return None;
                 }
+                Edit::Select(Selection::new(ranges, 0))
             }
             Step::AddCursorBelow => {
                 let head = selection.primary().head;
-                let line = text.char_to_line(head);
-                if line + 1 < text.len_lines() {
-                    let column = head - text.line_to_char(line);
-                    let below = text.line_to_char(line + 1);
-                    let width = text.line(line + 1).len_chars().saturating_sub(1);
-                    let range = Range::point(below + column.min(width));
-                    peer.select(selection.clone().push(range));
+                let line = text.char_to_line(head) + 1;
+                if line >= text.len_lines() {
+                    return None;
                 }
+                let column = head - text.line_to_char(line - 1);
+                let width = text.line(line).len_chars().saturating_sub(1);
+                let below = Range::point(text.line_to_char(line) + column.min(width));
+                Edit::Select(selection.clone().push(below))
             }
-            Step::KeepPrimary => peer.select(selection.clone().into_single()),
-            Step::Open(_) | Step::Close | Step::JumpNearPeer(_) => unreachable!(),
-        }
+            Step::KeepPrimary => Edit::Select(selection.clone().into_single()),
+            Step::Open(_) | Step::Close => return None,
+        };
+        Some(edit)
     }
 }
 
 fn occurrences<'a>(text: &'a Rope, word: &'a str) -> impl Iterator<Item = Range> + 'a {
     let string = text.to_string();
-    let matches: Vec<_> = string.match_indices(word).map(|(byte, _)| byte).collect();
-    matches.into_iter().map(move |byte| {
+    let bytes: Vec<_> = string.match_indices(word).map(|(byte, _)| byte).collect();
+    bytes.into_iter().map(move |byte| {
         let from = text.byte_to_char(byte);
         Range::new(from, from + word.chars().count())
     })
