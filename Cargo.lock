@@ -2508,18 +2508,13 @@ name = "helix-peer"
 version = "25.7.1"
 dependencies = [
  "anyhow",
- "arc-swap",
- "futures-util",
  "helix-core",
- "helix-loader",
  "helix-p2p",
- "helix-term",
- "helix-view",
  "log",
+ "parking_lot",
  "rand 0.9.5",
- "serde",
- "serde_json",
  "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
