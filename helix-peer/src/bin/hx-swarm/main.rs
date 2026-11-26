@@ -35,6 +35,7 @@ FLAGS:
     --seed <n>          Seed for the bots (default: time)
     --settle <secs>     Time without progress before failing (default: 30)
     --out <dir>         Directory for logs and diverged buffers
+    --local             Connect peers directly, without relays
 ";
 
 const POLL: Duration = Duration::from_millis(500);
@@ -48,6 +49,7 @@ struct Args {
     seed: u64,
     settle: u64,
     out: Option<PathBuf>,
+    local: bool,
 }
 
 impl Args {
@@ -62,6 +64,7 @@ impl Args {
             seed: now.as_millis() as u64,
             settle: 30,
             out: None,
+            local: false,
         };
         let mut argv = std::env::args();
         argv.next();
@@ -80,6 +83,7 @@ impl Args {
                 "--seed" => args.seed = value()?.parse()?,
                 "--settle" => args.settle = value()?.parse()?,
                 "--out" => args.out = Some(value()?.into()),
+                "--local" => args.local = true,
                 arg => bail!("unexpected argument: {arg}"),
             }
         }
@@ -97,7 +101,7 @@ struct Peer {
 }
 
 impl Peer {
-    fn spawn(name: String, out: &Path) -> Result<Self> {
+    fn spawn(name: String, out: &Path, local: bool) -> Result<Self> {
         let exe = format!("hx-peer{}", std::env::consts::EXE_SUFFIX);
         let exe = std::env::current_exe()?.with_file_name(exe);
         let mut child = Command::new(&exe)
@@ -105,6 +109,7 @@ impl Peer {
             .arg(&name)
             .arg("--log")
             .arg(out.join(format!("{name}.log")))
+            .args(local.then_some("--local"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .kill_on_drop(true)
@@ -154,7 +159,7 @@ async fn main() -> Result<()> {
     println!("seed {}, output in {}", args.seed, out.display());
 
     let mut peers: Vec<_> = (0..args.peers)
-        .map(|i| Peer::spawn(format!("bot{i}"), &out))
+        .map(|i| Peer::spawn(format!("bot{i}"), &out, args.local))
         .collect::<Result<_>>()?;
     let start = Instant::now();
 

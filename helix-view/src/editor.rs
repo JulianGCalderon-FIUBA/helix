@@ -445,6 +445,8 @@ pub struct P2pConfig {
     pub enable: bool,
     /// Read when starting or joining a session.
     pub name: Option<String>,
+    /// Only read at startup.
+    pub relay: bool,
 }
 
 impl Default for P2pConfig {
@@ -452,6 +454,7 @@ impl Default for P2pConfig {
         Self {
             enable: true,
             name: None,
+            relay: true,
         }
     }
 }
@@ -1491,7 +1494,7 @@ impl Editor {
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
             workspace_trust,
-            p2p: conf.p2p.enable.then(p2p::P2p::new),
+            p2p: conf.p2p.enable.then(|| p2p::P2p::new(conf.p2p.relay)),
         }
     }
 

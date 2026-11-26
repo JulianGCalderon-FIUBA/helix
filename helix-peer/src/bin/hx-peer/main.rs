@@ -3,6 +3,7 @@
 mod peer;
 
 use anyhow::{bail, Context, Result};
+use helix_view::editor::P2pConfig;
 
 use crate::peer::Peer;
 
@@ -13,6 +14,7 @@ USAGE:
 FLAGS:
     -h, --help          Print help information
     --name <name>       Name shown to peers
+    --local             Connect only to peers on the local network, without relays
     --log <file>        Specify a file to use for logging
     -v                  Increase logging verbosity each use for up to 3 times
 ";
@@ -21,6 +23,7 @@ FLAGS:
 struct Args {
     display_help: bool,
     name: Option<String>,
+    local: bool,
     log_file: Option<String>,
     verbosity: u64,
 }
@@ -35,6 +38,7 @@ impl Args {
             match arg.as_str() {
                 "-h" | "--help" => args.display_help = true,
                 "--name" => args.name = Some(argv.next().context("--name must specify a name")?),
+                "--local" => args.local = true,
                 "--log" => {
                     args.log_file = Some(argv.next().context("--log must specify a path to write")?)
                 }
@@ -63,5 +67,10 @@ async fn main() -> Result<()> {
         };
         helix_term::logging::init_file(level, log_file.as_ref())?;
     }
-    Peer::new(args.name).run().await
+    let p2p = P2pConfig {
+        name: args.name,
+        relay: !args.local,
+        ..P2pConfig::default()
+    };
+    Peer::new(p2p).run().await
 }

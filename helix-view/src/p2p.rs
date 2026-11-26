@@ -46,8 +46,8 @@ pub struct P2p {
 }
 
 impl P2p {
-    pub fn new() -> Self {
-        let (transport, incoming) = Service::new();
+    pub fn new(relay: bool) -> Self {
+        let (transport, incoming) = Service::new(relay);
         let (local_events_tx, local_events) = unbounded_channel();
         Self {
             transport,
@@ -100,12 +100,6 @@ impl P2p {
             Transmit::Unsubscribe(topic) => self.transport.unsubscribe(topic),
             Transmit::Send(channel, message) => self.transport.send(channel, message),
         }
-    }
-}
-
-impl Default for P2p {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
